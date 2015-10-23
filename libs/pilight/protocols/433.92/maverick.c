@@ -68,7 +68,7 @@ static void parseCode(void) {
 	int x=0,i=0;
 
 	for(x=0;x<100;x+=2) {
-		if(maverick->raw[x] > MIN_LONG_PULSE)) {
+		if(maverick->raw[x] > MIN_LONG_PULSE) {
 			printf("Long: %d\n", maverick->raw[x]);
 		} else if(maverick->raw[x] > MAX_PULSE_LENGTH) {
 			printf("Medium: %d\n", maverick->raw[x]);
