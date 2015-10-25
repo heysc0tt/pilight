@@ -38,7 +38,7 @@
 #define MAX_LONG_PULSE			6000
 #define RAW_LENGTH              50
 #define MIN_RAW_LENGTH			104
-#define MAX_RAW_LENGTH			150
+#define MAX_RAW_LENGTH			175
 
 static int validate(void) {
 	if(maverick->rawlen >= MIN_RAW_LENGTH && maverick->rawlen <= MAX_RAW_LENGTH) {
@@ -67,7 +67,7 @@ static void parseCode(void) {
 //	int binary[RAW_LENGTH/2], x = 0, i = 0;
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
 	int x=0,i=0;
-	
+
 	for(x=0;x<maverick->rawlen;x++) {
 		if(maverick->raw[x] > MIN_LONG_PULSE) {
 			printf("Long: %d\n", maverick->raw[x]);
