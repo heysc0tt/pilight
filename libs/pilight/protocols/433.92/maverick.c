@@ -66,8 +66,7 @@ static void parseCode(void) {
 //	int binary[RAW_LENGTH/2], x = 0, i = 0;
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
 	int x=0,i=0;
-
-	for(x=0;x<100;x+=2) {
+	for(x=0;x<100;x++) {
 		if(maverick->raw[x] > MIN_LONG_PULSE) {
 			printf("Long: %d\n", maverick->raw[x]);
 		} else if(maverick->raw[x] > MAX_PULSE_LENGTH) {
