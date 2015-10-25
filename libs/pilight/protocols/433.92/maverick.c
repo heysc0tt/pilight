@@ -37,17 +37,18 @@
 #define MIN_LONG_PULSE			4000
 #define MAX_LONG_PULSE			6000
 #define RAW_LENGTH              50
+#define MIN_RAW_LENGTH			104
+#define MAX_RAW_LENGTH			150
 
 static int validate(void) {
-	return 0;
-	// if(maverick->rawlen == RAW_LENGTH) {
-	// 	if(maverick->raw[maverick->rawlen-1] >= (MIN_PULSE_LENGTH*PULSE_DIV) &&
-	// 		maverick->raw[maverick->rawlen-1] <= (MAX_PULSE_LENGTH*PULSE_DIV)) {
-	// 		return 0;
-	// 	}
-	// }
+	if(maverick->rawlen >= MIN_RAW_LENGTH && maverick->rawlen <= MAX_RAW_LENGTH) {
+		if(maverick->raw[maverick->rawlen-1] >= (MIN_PULSE_LENGTH*PULSE_DIV) &&
+			maverick->raw[maverick->rawlen-1] <= (MAX_PULSE_LENGTH*PULSE_DIV)) {
+			return 0;
+		}
+	}
 
-	// return -1;
+	return -1;
 }
 
 static void createMessage(int id, int systemcode, int unit, int state) {
@@ -66,7 +67,8 @@ static void parseCode(void) {
 //	int binary[RAW_LENGTH/2], x = 0, i = 0;
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
 	int x=0,i=0;
-	for(x=0;x<100;x++) {
+	
+	for(x=0;x<maverick->rawlen;x++) {
 		if(maverick->raw[x] > MIN_LONG_PULSE) {
 			printf("Long: %d\n", maverick->raw[x]);
 		} else if(maverick->raw[x] > MAX_PULSE_LENGTH) {
@@ -220,8 +222,8 @@ void maverickInit(void) {
 	protocol_device_add(maverick, "maverick", "maverick thermometer");
 	maverick->devtype = WEATHER;
 	maverick->hwtype = RF433;
-	maverick->minrawlen = RAW_LENGTH;
-	maverick->maxrawlen = RAW_LENGTH;
+	maverick->minrawlen = MIN_RAW_LENGTH;
+	maverick->maxrawlen = MAX_RAW_LENGTH;
 	maverick->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	maverick->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
