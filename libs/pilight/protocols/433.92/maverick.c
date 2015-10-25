@@ -34,10 +34,10 @@
 #define MIN_PULSE_LENGTH        100
 #define MAX_PULSE_LENGTH        350
 #define AVG_PULSE_LENGTH        250
-#define MIN_LONG_PULSE			4000
+#define MIN_LONG_PULSE			1000
 #define MAX_LONG_PULSE			6000
 #define RAW_LENGTH              50
-#define MIN_RAW_LENGTH			104
+#define MIN_RAW_LENGTH			90
 #define MAX_RAW_LENGTH			175
 
 static int validate(void) {
@@ -226,6 +226,8 @@ void maverickInit(void) {
 	maverick->maxrawlen = MAX_RAW_LENGTH;
 	maverick->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	maverick->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
+	maverick->rxrpt = 4;
+
 
 	// options_add(&maverick->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 	// options_add(&maverick->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
