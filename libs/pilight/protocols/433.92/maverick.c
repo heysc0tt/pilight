@@ -66,7 +66,7 @@ static void createMessage(int id, int systemcode, int unit, int state) {
 static void parseCode(void) {
 //	int binary[RAW_LENGTH/2], x = 0, i = 0;
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
-	int x=0,i=0;
+	int x=0;
 	int values[maverick->rawlen];
 
 	for(x=0;x<maverick->rawlen;x++) {
@@ -82,41 +82,26 @@ static void parseCode(void) {
 		}
 	}
 
-	for(x=0;x<maverick->rawlen;x++) {
-		if(values[x] <0) {
-			//ignore
-		} else if(values[x] >0) {
-			// medium
-			// toggle bit
-			//
-		} else {
-			// short
-			if(expect_short_bit) {
-				expect_short_bit = 0;
-			}
-		}
-	}
-	boolean previous_period_was_short = false;
-	unsigned int current_byte = 0;
-	int shift_value = 0;
+	int previous_period_was_short = 0;
 	unsigned int bits[maverick->rawlen]; // shouldnt need all these
 	unsigned int bit_index=0;
+	unsigned int current_bit = 0;
 	for(x=0;x<maverick->rawlen;x++) {
 	    if (values[x] == 0) { // short pulse
-	      if (previous_period_was_short) {
+	      if (previous_period_was_short == 1) {
 	        // previous bit was short, add the current_bit value to the stream and continue to next incoming bit
 			bits[bit_index++] = current_bit;
-	        previous_period_was_short = false;
+	        previous_period_was_short = 0;
 	      }
 	      else {
 	        // previous bit was long, remember that and continue to next incoming bit
-	        previous_period_was_short = true;
+	        previous_period_was_short = 1;
 	      }
 	    }
 	    else if (values[x] == 1) { // medium pulse
 	      // long pulse
 	      // swap the current_bit
-          if (previous_period_was_short){ //cannot have a long pulse if previous_period was short
+          if (previous_period_was_short == 1){ //cannot have a long pulse if previous_period was short
           	printf("Oh, shit! Recieved medium after a single short.\n");
           	// throw exception?
           }
