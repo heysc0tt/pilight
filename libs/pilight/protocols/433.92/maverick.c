@@ -42,8 +42,8 @@
 
 static int validate(void) {
 	if(maverick->rawlen >= MIN_RAW_LENGTH && maverick->rawlen <= MAX_RAW_LENGTH) {
-		if(maverick->raw[maverick->rawlen-1] >= (MIN_PULSE_LENGTH*PULSE_DIV) &&
-			maverick->raw[maverick->rawlen-1] <= (MAX_PULSE_LENGTH*PULSE_DIV)) {
+		if(maverick->raw[maverick->rawlen-1] >= (MIN_PULSE_LENGTH) &&
+			maverick->raw[maverick->rawlen-1] <= (MAX_PULSE_LENGTH)) {
 			return 0;
 		}
 	}
@@ -67,15 +67,69 @@ static void parseCode(void) {
 //	int binary[RAW_LENGTH/2], x = 0, i = 0;
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
 	int x=0,i=0;
+	int values[maverick->rawlen];
 
 	for(x=0;x<maverick->rawlen;x++) {
 		if(maverick->raw[x] > MIN_LONG_PULSE) {
 			printf("Long: %d\n", maverick->raw[x]);
+			values[x] = -1;
 		} else if(maverick->raw[x] > MAX_PULSE_LENGTH) {
 			printf("Medium: %d\n", maverick->raw[x]);
+			values[x] = 1;
 		} else {
 			printf("Short: %d\n", maverick->raw[x]);
+			values[x] = 0;
 		}
+	}
+
+	for(x=0;x<maverick->rawlen;x++) {
+		if(values[x] <0) {
+			//ignore
+		} else if(values[x] >0) {
+			// medium
+			// toggle bit
+			//
+		} else {
+			// short
+			if(expect_short_bit) {
+				expect_short_bit = 0;
+			}
+		}
+	}
+	boolean previous_period_was_short = false;
+	unsigned int current_byte = 0;
+	int shift_value = 0;
+	unsigned int bits[maverick->rawlen]; // shouldnt need all these
+	unsigned int bit_index=0;
+	for(x=0;x<maverick->rawlen;x++) {
+	    if (values[x] == 0) { // short pulse
+	      if (previous_period_was_short) {
+	        // previous bit was short, add the current_bit value to the stream and continue to next incoming bit
+			bits[bit_index++] = current_bit;
+	        previous_period_was_short = false;
+	      }
+	      else {
+	        // previous bit was long, remember that and continue to next incoming bit
+	        previous_period_was_short = true;
+	      }
+	    }
+	    else if (values[x] == 1) { // medium pulse
+	      // long pulse
+	      // swap the current_bit
+          if (previous_period_was_short){ //cannot have a long pulse if previous_period was short
+          	printf("Oh, shit! Recieved medium after a single short.\n");
+          	// throw exception?
+          }
+
+	      current_bit = !current_bit;
+
+	      // add current_bit value to the stream and continue to next incoming bit
+		  bits[bit_index++] = current_bit;
+	    }
+	}		
+
+	for(x=0;x<bit_index;x++) {
+		printf("Bits[%d]=%d\n",x,bits[x]);
 	}
 
 	// id = binToDecRev(binary, 0, 5);
