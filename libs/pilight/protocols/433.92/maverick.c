@@ -34,7 +34,7 @@
 #define MIN_PULSE_LENGTH        100
 #define MAX_PULSE_LENGTH        350
 #define AVG_PULSE_LENGTH        250
-#define MIN_LONG_PULSE			1000
+#define MIN_LONG_PULSE			3000
 #define MAX_LONG_PULSE			6000
 #define RAW_LENGTH              50
 #define MIN_RAW_LENGTH			90
@@ -42,8 +42,8 @@
 
 static int validate(void) {
 	if(maverick->rawlen >= MIN_RAW_LENGTH && maverick->rawlen <= MAX_RAW_LENGTH) {
-		if(maverick->raw[maverick->rawlen-1] >= (MIN_PULSE_LENGTH) &&
-			maverick->raw[maverick->rawlen-1] <= (MAX_PULSE_LENGTH)) {
+		if(maverick->raw[maverick->rawlen-1] >= (MIN_PULSE_LENGTH*PULSE_DIV) &&
+			maverick->raw[maverick->rawlen-1] <= (MAX_PULSE_LENGTH*PULSE_DIV)) {
 			return 0;
 		}
 	}
