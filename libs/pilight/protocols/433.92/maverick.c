@@ -67,6 +67,22 @@ static void createMessage(int id, int systemcode, int unit, int state) {
 	}
 }
 
+static void parse_binary_data(char *binary_in, char *hex_out)
+{
+    int i,j;
+    unsigned char temp;
+    // Parse binary data into hex nibbles (stored inefficiently in bytes)
+    for(i=0;i<NUM_NIBBLES;i++){
+        hex_out[i]=0; //initialize to 0
+        for(j=0;j<4;j++){
+        	printf("reading bit %d\n", (i*4)+j);
+            hex_out[i] <<= 1;
+            temp = binary_in[(i*4)+j];
+            hex_out[i] = hex_out[i] | temp;
+        }
+    }
+}
+
 static void parseCode(void) {
 //	int binary[RAW_LENGTH/2], x = 0, i = 0;
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
@@ -136,22 +152,6 @@ static void parseCode(void) {
 	// unit = binToDecRev(binary, 21, 23 );
 	// state = binary[20];
 	// createMessage(id, systemcode, unit, state);
-}
-
-static void parse_binary_data(char *binary_in, char *hex_out)
-{
-    int i,j;
-    unsigned char temp;
-    // Parse binary data into hex nibbles (stored inefficiently in bytes)
-    for(i=0;i<NUM_NIBBLES;i++){
-        hex_out[i]=0; //initialize to 0
-        for(j=0;j<4;j++){
-        	printf("reading bit %d\n", (i*4)+j);
-            hex_out[i] <<= 1;
-            temp = binary_in[(i*4)+j];
-            hex_out[i] = hex_out[i] | temp;
-        }
-    }
 }
 
 static void createLow(int s, int e) {
