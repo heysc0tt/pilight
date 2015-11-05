@@ -127,7 +127,7 @@ static void parseCode(void) {
 	parse_binary_data(bits, nibbles);
 
 	for(x=0;x<NUM_NIBBLES;x++) {
-		printf("Nibble[%d]=%#02x\n");
+		printf("Nibble[%d]=%#02x\n", x,nibbles[x]);
 	}
 
 	// id = binToDecRev(binary, 0, 5);
