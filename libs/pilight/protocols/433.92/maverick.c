@@ -75,7 +75,6 @@ static void parse_binary_data(char *binary_in, char *hex_out)
     for(i=0;i<NUM_NIBBLES;i++){
         hex_out[i]=0; //initialize to 0
         for(j=0;j<4;j++){
-        	printf("reading bit %d\n", (i*4)+j);
             hex_out[i] <<= 1;
             temp = binary_in[(i*4)+j];
             hex_out[i] = hex_out[i] | temp;
@@ -129,13 +128,13 @@ static void parseCode(void) {
 
 	for(x=0;x<maverick->rawlen;x++) {
 		if(maverick->raw[x] > MIN_LONG_PULSE) {
-			printf("Long: %d\n", maverick->raw[x]);
+//			printf("Long: %d\n", maverick->raw[x]);
 			values[x] = -1;
 		} else if(maverick->raw[x] > MAX_PULSE_LENGTH) {
-			printf("Medium: %d\n", maverick->raw[x]);
+//			printf("Medium: %d\n", maverick->raw[x]);
 			values[x] = 1;
 		} else {
-			printf("Short: %d\n", maverick->raw[x]);
+//			printf("Short: %d\n", maverick->raw[x]);
 			values[x] = 0;
 		}
 	}
@@ -172,18 +171,16 @@ static void parseCode(void) {
 	    }
 	}		
 
-	printf("Start of Bits array with %d bits.", bit_index);
-	for(x=0;x<bit_index;x++) {
-		printf("Bits[%d]=%d\n",x,bits[x]);
-	}
-	printf("Done with Bits array.");
+	// for(x=0;x<bit_index;x++) {
+	// 	printf("Bits[%d]=%d\n",x,bits[x]);
+	// }
 
     char nibbles[NUM_NIBBLES];
 	parse_binary_data(bits, nibbles);
 
-	for(x=0;x<NUM_NIBBLES;x++) {
-		printf("Nibble[%d]=%#02x\n", x,nibbles[x]);
-	}
+	// for(x=0;x<NUM_NIBBLES;x++) {
+	// 	printf("Nibble[%d]=%#02x\n", x,nibbles[x]);
+	// }
 
 	signed int probe_1,probe_2;
 	probe_1 = calc_probe_temp(1, nibbles);
