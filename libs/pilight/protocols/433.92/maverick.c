@@ -90,7 +90,8 @@ static void parseCode(void) {
 	char bits[NUM_BITS]; // shouldnt need all these
 	unsigned int bit_index=0;
 	unsigned int current_bit = 0;
-	for(x=0;x<maverick->rawlen;x++) {
+	bits[0] = 1;
+	for(x=1;x<maverick->rawlen;x++) {
 	    if (values[x] == 0) { // short pulse
 	      if (previous_period_was_short == 1) {
 	        // previous bit was short, add the current_bit value to the stream and continue to next incoming bit
@@ -137,7 +138,7 @@ static void parseCode(void) {
 	// createMessage(id, systemcode, unit, state);
 }
 
-void parse_binary_data(char *binary_in, char *hex_out)
+static void parse_binary_data(char *binary_in, char *hex_out)
 {
     int i,j;
     unsigned char temp;
@@ -145,6 +146,7 @@ void parse_binary_data(char *binary_in, char *hex_out)
     for(i=0;i<NUM_NIBBLES;i++){
         hex_out[i]=0; //initialize to 0
         for(j=0;j<4;j++){
+        	printf("reading bit %d\n", (i*4)+j);
             hex_out[i] <<= 1;
             temp = binary_in[(i*4)+j];
             hex_out[i] = hex_out[i] | temp;
