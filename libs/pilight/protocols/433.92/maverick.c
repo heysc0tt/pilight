@@ -83,6 +83,44 @@ static void parse_binary_data(char *binary_in, char *hex_out)
     }
 }
 
+//Calculate probe temperature in celsius
+static signed int calc_probe_temp(char which_probe, char *rx_parsed)
+{
+    int i, offset, probe_temp;
+    unsigned char   rx_quart[5];
+    
+    if(which_probe == 1)
+        offset = 8;
+    else
+        offset = 13;
+
+    //Parse data to quaternary
+    for(i=0;i<5;i++){
+        switch(rx_parsed[i+offset]){
+            case 0x05:
+                rx_quart[i] = 0;
+            break;
+            case 0x06:
+                rx_quart[i] = 1;
+            break;
+            case 0x09:
+                rx_quart[i] = 2;
+            break;
+            case 0x0A:
+                rx_quart[i] = 3;
+            break;
+        }
+    }
+    probe_temp = 0;
+    probe_temp += rx_quart[0] * 256;
+    probe_temp += rx_quart[1] * 64;
+    probe_temp += rx_quart[2] * 16;
+    probe_temp += rx_quart[3] * 4;
+    probe_temp += rx_quart[4] * 1;
+    probe_temp -= 532;
+    return probe_temp;
+}
+
 static void parseCode(void) {
 //	int binary[RAW_LENGTH/2], x = 0, i = 0;
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
@@ -104,7 +142,7 @@ static void parseCode(void) {
 
 	int previous_period_was_short = 0;
 	char bits[NUM_BITS]; // shouldnt need all these
-	unsigned int bit_index=0;
+	unsigned int bit_index=1;
 	unsigned int current_bit = 1;
 	bits[0] = current_bit;
 	for(x=0;x<maverick->rawlen;x++) {
@@ -146,6 +184,13 @@ static void parseCode(void) {
 	for(x=0;x<NUM_NIBBLES;x++) {
 		printf("Nibble[%d]=%#02x\n", x,nibbles[x]);
 	}
+
+	signed int probe_1,probe_2;
+	probe_1 = calc_probe_temp(1, nibbles);
+	probe_2 = calc_probe_temp(2, nibbles);
+
+	printf("Probe 1: %d\n", probe_1);
+	printf("Probe 2: %d\n", probe_2);
 
 	// id = binToDecRev(binary, 0, 5);
 	// systemcode = binToDecRev(binary, 6, 19);
