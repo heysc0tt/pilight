@@ -40,6 +40,10 @@
 #define MIN_RAW_LENGTH			90
 #define MAX_RAW_LENGTH			175
 
+#define NUM_BYTES       13
+#define NUM_NIBBLES     NUM_BYTES * 2
+#define NUM_BITS        NUM_BYTES * 8	
+
 static int validate(void) {
 	if(maverick->rawlen >= MIN_RAW_LENGTH && maverick->rawlen <= MAX_RAW_LENGTH) {
 		if(maverick->raw[maverick->rawlen-1] >= (MIN_PULSE_LENGTH*PULSE_DIV) &&
@@ -83,7 +87,7 @@ static void parseCode(void) {
 	}
 
 	int previous_period_was_short = 0;
-	unsigned int bits[maverick->rawlen]; // shouldnt need all these
+	char bits[NUM_BITS]; // shouldnt need all these
 	unsigned int bit_index=0;
 	unsigned int current_bit = 0;
 	for(x=0;x<maverick->rawlen;x++) {
@@ -113,8 +117,17 @@ static void parseCode(void) {
 	    }
 	}		
 
+	printf("Start of Bits array with %d bits.", bit_index);
 	for(x=0;x<bit_index;x++) {
 		printf("Bits[%d]=%d\n",x,bits[x]);
+	}
+	printf("Done with Bits array.");
+
+    char nibbles[NUM_NIBBLES];
+	parse_binary_data(bits, nibbles);
+
+	for(x=0;x<NUM_NIBBLES;x++) {
+		printf("Nibble[%d]=%#02x\n");
 	}
 
 	// id = binToDecRev(binary, 0, 5);
@@ -122,6 +135,21 @@ static void parseCode(void) {
 	// unit = binToDecRev(binary, 21, 23 );
 	// state = binary[20];
 	// createMessage(id, systemcode, unit, state);
+}
+
+void parse_binary_data(char *binary_in, char *hex_out)
+{
+    int i,j;
+    unsigned char temp;
+    // Parse binary data into hex nibbles (stored inefficiently in bytes)
+    for(i=0;i<NUM_NIBBLES;i++){
+        hex_out[i]=0; //initialize to 0
+        for(j=0;j<4;j++){
+            hex_out[i] <<= 1;
+            temp = binary_in[(i*4)+j];
+            hex_out[i] = hex_out[i] | temp;
+        }
+    }
 }
 
 static void createLow(int s, int e) {
