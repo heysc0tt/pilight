@@ -105,9 +105,9 @@ static void parseCode(void) {
 	int previous_period_was_short = 0;
 	char bits[NUM_BITS]; // shouldnt need all these
 	unsigned int bit_index=0;
-	unsigned int current_bit = 0;
-	bits[0] = 1;
-	for(x=1;x<maverick->rawlen;x++) {
+	unsigned int current_bit = 1;
+	bits[0] = current_bit;
+	for(x=0;x<maverick->rawlen;x++) {
 	    if (values[x] == 0) { // short pulse
 	      if (previous_period_was_short == 1) {
 	        // previous bit was short, add the current_bit value to the stream and continue to next incoming bit
