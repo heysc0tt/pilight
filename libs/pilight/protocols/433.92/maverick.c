@@ -54,17 +54,10 @@ static int validate(void) {
 
 	return -1;
 }
-
-static void createMessage(int id, int systemcode, int unit, int state) {
+static void createMessage(int foodTemp, int bbqTemp) {
 	maverick->message = json_mkobject();
-	json_append_member(maverick->message, "id", json_mknumber(id, 0));
-	json_append_member(maverick->message, "systemcode", json_mknumber(systemcode, 0));
-	json_append_member(maverick->message, "unit", json_mknumber(unit, 0));
-	if(state == 0) {
-		json_append_member(maverick->message, "state", json_mkstring("on"));
-	} else {
-		json_append_member(maverick->message, "state", json_mkstring("off"));
-	}
+	json_append_member(maverick->message, "food", json_mknumber(foodTemp, 0));
+	json_append_member(maverick->message, "bbq", json_mknumber(bbqTemp, 0));
 }
 
 static void parse_binary_data(char *binary_in, char *hex_out)
@@ -190,129 +183,7 @@ static void parseCode(void) {
 	logprintf(LOG_DEBUG, "Probe 1: %d\n", probe_1);
 	logprintf(LOG_DEBUG, "Probe 2: %d\n", probe_2);
 
-	// id = binToDecRev(binary, 0, 5);
-	// systemcode = binToDecRev(binary, 6, 19);
-	// unit = binToDecRev(binary, 21, 23 );
-	// state = binary[20];
-	// createMessage(id, systemcode, unit, state);
-}
-
-static void createLow(int s, int e) {
-	int i;
-	for(i=s;i<=e;i+=2) {
-		maverick->raw[i]=(PULSE_MULTIPLIER*AVG_PULSE_LENGTH);
-		maverick->raw[i+1]=(AVG_PULSE_LENGTH);
-	}
-}
-static void createHigh(int s, int e) {
-	int i;
-	for(i=s;i<=e;i+=2) {
-		maverick->raw[i]=(AVG_PULSE_LENGTH);
-		maverick->raw[i+1]=(PULSE_MULTIPLIER*AVG_PULSE_LENGTH);
-	}
-}
-
-static void clearCode(void) {
-	createHigh(0,47);
-}
-
-static void createId(int id) {
-	int binary[255];
-	int length = 0;
-	int i=0, x=0;
-
-	length = decToBinRev(id, binary);
-	for(i=0;i<=length;i++) {
-		if(binary[i]==1) {
-			x=i*2;
-			createLow(11-(x+1), 11-x);
-		}
-	}
-}
-
-
-static void createSystemCode(int systemcode) {
-	int binary[255];
-	int length = 0;
-	int i=0, x=0;
-
-	length = decToBinRev(systemcode, binary);
-	for(i=0;i<=length;i++) {
-		if(binary[i]==1) {
-			x=i*2;
-			createLow(39-(x+1), 39-x);
-		}
-	}
-}
-
-static void createUnit(int unit) {
-	int binary[255];
-	int length = 0;
-	int i=0, x=0;
-
-	length = decToBinRev(unit, binary);
-	for(i=0;i<=length;i++) {
-		if(binary[i]==1) {
-			x=i*2;
-			createLow(47-(x+1), 47-x);
-		}
-	}
-}
-
-static void createState(int state) {
-	if(state == 0) {
-		createLow(40, 41);
-	}
-}
-
-
-static void createFooter(void) {
-	maverick->raw[48]=(AVG_PULSE_LENGTH);
-	maverick->raw[49]=(PULSE_DIV*AVG_PULSE_LENGTH);
-}
-
-static int createCode(JsonNode *code) {
-	int id = -1;
-	int systemcode = -1;
-	int unit = -1;
-	int state = -1;
-	double itmp = -1;
-
-	if(json_find_number(code, "id", &itmp) == 0)
-		id = (int)round(itmp);
-	if(json_find_number(code, "systemcode", &itmp) == 0)
-		systemcode = (int)round(itmp);
-	if(json_find_number(code, "unit", &itmp) == 0)
-		unit = (int)round(itmp);
-	if(json_find_number(code, "off", &itmp) == 0)
-		state=1;
-	if(json_find_number(code, "on", &itmp) == 0)
-		state=0;
-
-	if(id == -1 || systemcode == -1 || unit == -1 || state == -1) {
-		logprintf(LOG_ERR, "maverick: insufficient number of arguments");
-		return EXIT_FAILURE;
-	} else if(id > 63 || id < 0) {
-		logprintf(LOG_ERR, "maverick: invalid id range");
-		return EXIT_FAILURE;
-	} else if(systemcode > 16999 || systemcode < 0) {
-		logprintf(LOG_ERR, "maverick: invalid systemcode range");
-		return EXIT_FAILURE;
-	} else if(unit > 7 || unit < 0) {
-		logprintf(LOG_ERR, "maverick: invalid unit range");
-		return EXIT_FAILURE;
-	} else {
-		createMessage(id, systemcode, unit, state);
-		clearCode();
-		createId(id);
-		createSystemCode(systemcode);
-		createState(state);
-		createUnit(unit);
-		createFooter();
-		maverick->rawlen = RAW_LENGTH;
-		state = 0;
-	}
-	return EXIT_SUCCESS;
+	createMessage(probe_1, probe_2);
 }
 
 static void printHelp(void) {
@@ -346,6 +217,8 @@ void maverickInit(void) {
 	// options_add(&maverick->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-7])$");
 	// options_add(&maverick->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,4}|1[0-6][0-9]{3})$");
 	options_add(&maverick->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-3])$");
+	options_add(&maverick->options, 'f', "food", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
+	options_add(&maverick->options, 'b', "bbq", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
 
 	// options_add(&maverick->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
