@@ -223,7 +223,6 @@ void maverickInit(void) {
 	// options_add(&maverick->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	maverick->parseCode=&parseCode;
-	maverick->createCode=&createCode;
 	maverick->printHelp=&printHelp;
 	maverick->validate=&validate;
 }
