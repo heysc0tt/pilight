@@ -157,13 +157,12 @@ static void parseCode(void) {
 	      }
 	    }
 	    else if (values[x] == 1) { // medium pulse
-	      // long pulse
-	      // swap the current_bit
           if (previous_period_was_short == 1){ //cannot have a long pulse if previous_period was short
           	printf("Oh, shit! Recieved medium after a single short.\n");
-          	// throw exception?
+          	return; // give up now
           }
 
+	      // swap the current_bit
 	      current_bit = !current_bit;
 
 	      // add current_bit value to the stream and continue to next incoming bit
@@ -177,6 +176,8 @@ static void parseCode(void) {
 
     char nibbles[NUM_NIBBLES];
 	parse_binary_data(bits, nibbles);
+
+	//Validate? Checksum?
 
 	// for(x=0;x<NUM_NIBBLES;x++) {
 	// 	printf("Nibble[%d]=%#02x\n", x,nibbles[x]);
