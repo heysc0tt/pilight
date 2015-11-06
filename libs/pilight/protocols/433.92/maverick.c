@@ -157,9 +157,9 @@ static void parseCode(void) {
 	      }
 	    }
 	    else if (values[x] == 1) { // medium pulse
-          if (previous_period_was_short == 1){ //cannot have a long pulse if previous_period was short
-          	printf("Oh, shit! Recieved medium after a single short.\n");
-          	return; // give up now
+          if (previous_period_was_short == 1) { //cannot have a long pulse if previous_period was short
+			logprintf(LOG_DEBUG, "Oh, shit! Recieved medium after a single short.");
+			return;
           }
 
 	      // swap the current_bit
@@ -173,7 +173,7 @@ static void parseCode(void) {
 	// for(x=0;x<bit_index;x++) {
 	// 	printf("Bits[%d]=%d\n",x,bits[x]);
 	// }
-
+    logprintf(LOG_DEBUG, "Parsing bits into nibbles.");
     char nibbles[NUM_NIBBLES];
 	parse_binary_data(bits, nibbles);
 
@@ -187,8 +187,8 @@ static void parseCode(void) {
 	probe_1 = calc_probe_temp(1, nibbles);
 	probe_2 = calc_probe_temp(2, nibbles);
 
-	printf("Probe 1: %d\n", probe_1);
-	printf("Probe 2: %d\n", probe_2);
+	logprintf(LOG_DEBUG, "Probe 1: %d\n", probe_1);
+	logprintf(LOG_DEBUG, "Probe 2: %d\n", probe_2);
 
 	// id = binToDecRev(binary, 0, 5);
 	// systemcode = binToDecRev(binary, 6, 19);
