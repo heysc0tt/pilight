@@ -56,7 +56,7 @@ static int validate(void) {
 }
 static void createMessage(int foodTemp, int bbqTemp) {
 	maverick->message = json_mkobject();
-	json_append_member(maverick->message, "food", json_mknumber(foodTemp, 0));
+	json_append_member(maverick->message, "temperature", json_mknumber(foodTemp, 0));
 	json_append_member(maverick->message, "bbq", json_mknumber(bbqTemp, 0));
 }
 
@@ -217,8 +217,10 @@ void maverickInit(void) {
 	// options_add(&maverick->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-7])$");
 	// options_add(&maverick->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,4}|1[0-6][0-9]{3})$");
 	options_add(&maverick->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-3])$");
-	options_add(&maverick->options, 'f', "food", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
+	options_add(&maverick->options, 't', "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
 	options_add(&maverick->options, 'b', "bbq", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
+
+	options_add(&maverick->options, 0, "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
 
 	// options_add(&maverick->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
