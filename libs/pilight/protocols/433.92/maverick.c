@@ -109,7 +109,7 @@ static void storeMessage() {
 		logprintf(LOG_ERROR, "%s\n", error.message);
 	}
 
-	bcon_destroy(bson);
+	bson_destroy(bson);
 
 	/*
 	* Release our handles and clean up libmongoc
