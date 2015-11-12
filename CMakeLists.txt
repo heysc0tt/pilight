@@ -365,7 +365,12 @@ if(${MODULESPACK} MATCHES "OFF" OR WIN32)
 		target_link_libraries(${PROJECT_NAME}_shared ${CMAKE_PCAP_LIBS_INIT})
 		target_link_libraries(${PROJECT_NAME}_static ${CMAKE_PCAP_LIBS_INIT})
 	endif()
-		
+
+	if(${PROTOCOL_MAVERICK} MATCHES "ON")
+		target_link_libraries(${PROJECT_NAME}_shared ${CMAKE_MONGOC_LIBS_INIT})
+		target_link_libraries(${PROJECT_NAME}_static ${CMAKE_MONGOC_LIBS_INIT})
+	endif()		
+
 	if(NOT WIN32)
 		target_link_libraries(${PROJECT_NAME}_shared ${CMAKE_UNWIND_LIBS_INIT})
 		target_link_libraries(${PROJECT_NAME}_static ${CMAKE_UNWIND_LIBS_INIT})
