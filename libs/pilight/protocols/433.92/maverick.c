@@ -71,8 +71,7 @@ static void storeMessage() {
 	mongoc_collection_t *collection;
 	bson_t              *bson;
 	bson_error_t        error;
-	char                *str,
-						*jstr;
+	char                *str;
 
 	/*
     * Required to initialize libmongoc's internals
@@ -91,12 +90,12 @@ static void storeMessage() {
 	collection = mongoc_client_get_collection (client, "maverick", "temperatures");
 
 	// create bson from json
-	jstr = json_stringify(maverick->message, NULL);
-	bson = bson_new_from_json (jstr, -1, &error);
-	json_free(jstr);
+	const char *jsonStr = json_stringify(maverick->message, NULL);
+	bson = bson_new_from_json (jsonStr, -1, &error);
+	json_free(jsonStr);
 
 	if (!bson) {
-		logprintf(LOG_ERROR, "%s\n", error.message);
+		logprintf(LOG_ERR, "%s\n", error.message);
 		return;
 	}
 
@@ -106,7 +105,7 @@ static void storeMessage() {
 
 	// insert
 	if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, bson, NULL, &error)) {
-		logprintf(LOG_ERROR, "%s\n", error.message);
+		logprintf(LOG_ERR, "%s\n", error.message);
 	}
 
 	bson_destroy(bson);
