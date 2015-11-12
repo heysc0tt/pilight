@@ -20,7 +20,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <mongo.h>
+#include <bson.h>
+#include <bcon.h>
+#include <mongoc.h>
 
 #include "../../core/pilight.h"
 #include "../../core/common.h"
@@ -64,15 +66,58 @@ static void createMessage(int foodTemp, int bbqTemp) {
 }
 
 static void storeMessage() {
+	mongoc_client_t     *client;
+	mongoc_database_t   *database;
+	mongoc_collection_t *collection;
+	bson_t              *bson;
+	bson_error_t        error;
+	char                *str,
+						*jstr;
+
 	/*
     * Required to initialize libmongoc's internals
     */
     mongoc_init ();
 
-	// maverick->message = json_mkobject();
-	// json_append_member(maverick->message, "id", json_mknumber(1, 0));
-	// json_append_member(maverick->message, "temperature", json_mknumber(foodTemp, 0));
-	// json_append_member(maverick->message, "bbq", json_mknumber(bbqTemp, 0));
+	/*
+	* Create a new client instance
+	*/
+	client = mongoc_client_new ("mongodb://192.168.1.142:27017");
+
+	/*
+	* Get a handle on the database "maverick" and collection "temperatures"
+	*/
+	database = mongoc_client_get_database (client, "maverick");
+	collection = mongoc_client_get_collection (client, "maverick", "temperatures");
+
+	// create bson from json
+	jstr = json_stringify(maverick->message, NULL);
+	bson = bson_new_from_json (jstr, -1, &error);
+	json_free(jstr);
+
+	if (!bson) {
+		logprintf(LOG_ERROR, "%s\n", error.message);
+		return;
+	}
+
+	str = bson_as_json (bson, NULL);
+	logprintf(LOG_DEBUG, "%s\n", str);
+	bson_free (str);
+
+	// insert
+	if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, bson, NULL, &error)) {
+		logprintf(LOG_ERROR, "%s\n", error.message);
+	}
+
+	bcon_destroy(bson);
+
+	/*
+	* Release our handles and clean up libmongoc
+	*/
+	mongoc_collection_destroy (collection);
+	mongoc_database_destroy (database);
+	mongoc_client_destroy (client);
+	mongoc_cleanup ();
 }
 
 static void parse_binary_data(char *binary_in, char *hex_out)

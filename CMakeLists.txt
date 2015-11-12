@@ -285,6 +285,8 @@ endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/inc)
 include_directories(/usr/local/include/)
+include_directories(/usr/local/include/libmongoc-1.0)
+include_directories(/usr/local/include/libbson-1.0)
 
 add_subdirectory(inc)
 add_subdirectory(libs)
