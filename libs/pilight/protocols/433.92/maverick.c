@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <mongo.h>
 
 #include "../../core/pilight.h"
 #include "../../core/common.h"
@@ -54,11 +55,24 @@ static int validate(void) {
 
 	return -1;
 }
+
 static void createMessage(int foodTemp, int bbqTemp) {
 	maverick->message = json_mkobject();
 	json_append_member(maverick->message, "id", json_mknumber(1, 0));
 	json_append_member(maverick->message, "temperature", json_mknumber(foodTemp, 0));
 	json_append_member(maverick->message, "bbq", json_mknumber(bbqTemp, 0));
+}
+
+static void storeMessage() {
+	/*
+    * Required to initialize libmongoc's internals
+    */
+    mongoc_init ();
+
+	// maverick->message = json_mkobject();
+	// json_append_member(maverick->message, "id", json_mknumber(1, 0));
+	// json_append_member(maverick->message, "temperature", json_mknumber(foodTemp, 0));
+	// json_append_member(maverick->message, "bbq", json_mknumber(bbqTemp, 0));
 }
 
 static void parse_binary_data(char *binary_in, char *hex_out)
@@ -185,6 +199,7 @@ static void parseCode(void) {
 	logprintf(LOG_DEBUG, "Probe 2: %d\n", probe_2);
 
 	createMessage(probe_1, probe_2);
+	storeMessage();
 }
 
 static void printHelp(void) {

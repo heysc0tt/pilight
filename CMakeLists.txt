@@ -157,6 +157,31 @@ if(NOT WIN32)
 		endif()
 	endif()
 
+	if(${PROTOCOL_MAVERICK} MATCHES "ON")
+		set(CMAKE_MONGOC_LIBS_INIT)
+
+		find_library(CMAKE_MONGOC_LIBS_INIT
+			NAME mongoc
+			PATHS
+				${CROSS_COMPILE_LIBS}
+				/usr/lib
+				/usr/lib32
+				/usr/lib64
+				/usr/lib/i386-linux-gnu		
+				/usr/lib/x86_64-linux-gnu
+				/usr/local/lib
+				/usr/local/lib32
+				/usr/local/lib64
+				/usr/lib/arm-linux-gnueabi
+				/usr/lib/arm-linux-gnueabihf
+			NO_DEFAULT_PATH)
+
+		if(${CMAKE_MONGOC_LIBS_INIT} MATCHES "CMAKE_MONGOC_LIBS_INIT-NOTFOUND")
+			message(FATAL_ERROR "Looking for libmongoc - not found")
+		else()
+			message(STATUS "Looking for libmongoc - found (${CMAKE_MONGOC_LIBS_INIT})")
+		endif()
+	endif()
 
 	if(${WEBSERVER_HTTPS} MATCHES "ON")
 		set(CMAKE_SSL_LIBS_INIT)
