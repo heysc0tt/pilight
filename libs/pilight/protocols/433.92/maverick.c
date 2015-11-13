@@ -134,6 +134,31 @@ static void parse_binary_data(char *binary_in, char *hex_out)
     }
 }
 
+//validate header looks like 0xAA9995
+static int validate_header(char *rx_parsed)
+{    
+    if(rx_parsed[0] != 0x0A) {
+    	return -1;
+    }
+    if(rx_parsed[1] != 0x0A) {
+    	return -1;
+    }
+    if(rx_parsed[2] != 0x09) {
+    	return -1;
+    }
+    if(rx_parsed[3] != 0x09) {
+    	return -1;
+    }
+    if(rx_parsed[4] != 0x09) {
+    	return -1;
+    }
+    if(rx_parsed[5] != 0x05) {
+    	return -1;
+    }
+
+    return 0;
+}
+
 //Calculate probe temperature in celsius
 static signed int calc_probe_temp(char which_probe, char *rx_parsed)
 {
@@ -222,18 +247,15 @@ static void parseCode(void) {
 	    }
 	}		
 
-	// for(x=0;x<bit_index;x++) {
-	// 	printf("Bits[%d]=%d\n",x,bits[x]);
-	// }
     logprintf(LOG_DEBUG, "Parsing bits into nibbles.");
     char nibbles[NUM_NIBBLES];
 	parse_binary_data(bits, nibbles);
 
-	//Validate? Checksum?
-
-	// for(x=0;x<NUM_NIBBLES;x++) {
-	// 	printf("Nibble[%d]=%#02x\n", x,nibbles[x]);
-	// }
+	//Validate
+	if(validate_header(nibbles) != 0) {
+		logprintf(LOG_DEBUG, "The header doesn't match, skipping this message.");
+		return;
+	}
 
 	signed int probe_1,probe_2;
 	probe_1 = calc_probe_temp(1, nibbles);
