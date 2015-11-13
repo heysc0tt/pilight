@@ -158,6 +158,30 @@ if(NOT WIN32)
 	endif()
 
 	if(${PROTOCOL_MAVERICK} MATCHES "ON")
+		set(CMAKE_BSON_LIBS_INIT)
+
+		find_library(CMAKE_BSON_LIBS_INIT
+			NAME bson-1.0
+			PATHS
+				${CROSS_COMPILE_LIBS}
+				/usr/lib
+				/usr/lib32
+				/usr/lib64
+				/usr/lib/i386-linux-gnu		
+				/usr/lib/x86_64-linux-gnu
+				/usr/local/lib
+				/usr/local/lib32
+				/usr/local/lib64
+				/usr/lib/arm-linux-gnueabi
+				/usr/lib/arm-linux-gnueabihf
+			NO_DEFAULT_PATH)
+
+		if(${CMAKE_BSON_LIBS_INIT} MATCHES "CMAKE_BSON_LIBS_INIT-NOTFOUND")
+			message(FATAL_ERROR "Looking for libbson - not found")
+		else()
+			message(STATUS "Looking for libbson - found (${CMAKE_BSON_LIBS_INIT})")
+		endif()
+
 		set(CMAKE_MONGOC_LIBS_INIT)
 
 		find_library(CMAKE_MONGOC_LIBS_INIT
@@ -182,29 +206,6 @@ if(NOT WIN32)
 			message(STATUS "Looking for libmongoc - found (${CMAKE_MONGOC_LIBS_INIT})")
 		endif()
 
-		set(CMAKE_BSON_LIBS_INIT)
-
-		find_library(CMAKE_BSON_LIBS_INIT
-			NAME bson
-			PATHS
-				${CROSS_COMPILE_LIBS}
-				/usr/lib
-				/usr/lib32
-				/usr/lib64
-				/usr/lib/i386-linux-gnu		
-				/usr/lib/x86_64-linux-gnu
-				/usr/local/lib
-				/usr/local/lib32
-				/usr/local/lib64
-				/usr/lib/arm-linux-gnueabi
-				/usr/lib/arm-linux-gnueabihf
-			NO_DEFAULT_PATH)
-
-		if(${CMAKE_BSON_LIBS_INIT} MATCHES "CMAKE_BSON_LIBS_INIT-NOTFOUND")
-			message(FATAL_ERROR "Looking for libbson - not found")
-		else()
-			message(STATUS "Looking for libbson - found (${CMAKE_BSON_LIBS_INIT})")
-		endif()
 
 	endif()
 
