@@ -159,6 +159,35 @@ static int validate_header(char *rx_parsed)
     return 0;
 }
 
+uint16_t shiftreg(uint16_t currentValue) {
+    uint8_t msb = (currentValue >> 15) & 1;
+    currentValue <<= 1;
+    if (msb == 1) {
+        // Toggle pattern for feedback bits
+        // Toggle, if MSB is 1
+        currentValue ^= 0x1021;
+    }
+    return currentValue;
+}
+
+//data = binary representation of nibbles 6 - 17
+//e.g. xxxx:xxxx:xxxx:0010:1000:1010:0110:0101:0101:xxxx:xxxx:xxxx:xxxx
+//  -> uint32_t data = 0x28a655
+uint16_t calculate_checksum(uint32_t data) {
+    uint16_t mask = 0x3331; //initial value of linear feedback shift register
+    uint16_t csum = 0x0;
+    int i = 0;
+    for(i = 0; i < 24; ++i) {
+        if((data >> i) & 0x01) {
+           //data bit at current position is "1"
+           //do XOR with mask
+          csum ^= mask; 
+        }
+        mask = shiftreg(mask);
+    }
+    return csum;
+}
+
 //Calculate probe temperature in celsius
 static signed int calc_probe_temp(char which_probe, char *rx_parsed)
 {
@@ -202,6 +231,11 @@ static void parseCode(void) {
 //	int id = -1, state = -1, unit = -1, systemcode = -1;
 	int x=0;
 	int values[maverick->rawlen];
+
+    uint32_t check_data;
+    uint32_t probe1=0, probe2=0;
+    uint16_t chksum_data, chksum_sent, chk_xor, chk_xor_expected=0;
+
 
 	for(x=0;x<maverick->rawlen;x++) {
 		if(maverick->raw[x] > MIN_LONG_PULSE) {
@@ -256,6 +290,49 @@ static void parseCode(void) {
 		logprintf(LOG_DEBUG, "The header doesn't match, skipping this message.");
 		return;
 	}
+
+    for(x=0; x<=4; x++)
+    {
+        probe1 += nibbles[12-x] * (1<<(2*x));
+        probe2 += nibbles[17-x] * (1<<(2*x));
+    }
+
+//     printf("%x %x ",probe1,probe2);
+    check_data = nibbles[6] << 22;
+//     printf("%x ", check_data);
+    check_data |= nibbles[7] << 20;
+//     printf("%x ", check_data);
+    check_data |= (uint32_t) probe1 << 10;
+//     printf("%x ", check_data);
+    check_data |= (uint32_t) probe2;
+//     printf("%x ", check_data);
+    chksum_data = calculate_checksum(check_data);
+
+
+    chksum_sent = (uint16_t) nibbles[18] << 14;
+    chksum_sent |= (uint16_t) nibbles[19] << 12;
+    chksum_sent |= (uint16_t) nibbles[20] << 10;
+    chksum_sent |= (uint16_t) nibbles[21] << 8;
+    chksum_sent |= (uint16_t) nibbles[22] << 6;
+    chksum_sent |= (uint16_t) nibbles[23] << 4;
+
+    if(_str[24]=='1' || _str[24]=='2')
+    {
+        chksum_sent |= (uint16_t) ((nibbles[25])&1)<<3;
+        chksum_sent |= (uint16_t) ((nibbles[25])&2)<<1;
+
+        if(_str[24]=='1')
+            chksum_sent |= 0x02;
+    }
+    else
+    {
+        chksum_sent |= (uint16_t) nibbles[24] << 2;
+        chksum_sent |= (uint16_t) nibbles[25];
+    }
+// 		chksum_sent |= (uint16_t) inv_quart(_str[25])<<2;
+
+    chk_xor = (chksum_data & 0xfffe) ^ chksum_sent;
+    logprintf(LOG_DEBUG, " chk_xor: %x (%x %x)\n",chk_xor,chksum_data, chksum_sent);
 
 	signed int probe_1,probe_2;
 	probe_1 = calc_probe_temp(1, nibbles);
