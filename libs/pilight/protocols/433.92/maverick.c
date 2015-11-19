@@ -284,7 +284,7 @@ static void parseCode(void) {
     logprintf(LOG_DEBUG, "Parsing bits into nibbles.");
     char nibbles[NUM_NIBBLES];
 	parse_binary_data(bits, nibbles);
-
+	logprintf(LOG_DEBUG, "Nibbles: %s", nibbles);
 	//Validate
 	if(validate_header(nibbles) != 0) {
 		logprintf(LOG_DEBUG, "The header doesn't match, skipping this message.");
@@ -316,12 +316,12 @@ static void parseCode(void) {
     chksum_sent |= (uint16_t) nibbles[22] << 6;
     chksum_sent |= (uint16_t) nibbles[23] << 4;
 
-    if(_str[24]=='1' || _str[24]=='2')
+    if(nibbles[24]=='1' || nibbles[24]=='2')
     {
         chksum_sent |= (uint16_t) ((nibbles[25])&1)<<3;
         chksum_sent |= (uint16_t) ((nibbles[25])&2)<<1;
 
-        if(_str[24]=='1')
+        if(nibbles[24]=='1')
             chksum_sent |= 0x02;
     }
     else
@@ -332,7 +332,7 @@ static void parseCode(void) {
 // 		chksum_sent |= (uint16_t) inv_quart(_str[25])<<2;
 
     chk_xor = (chksum_data & 0xfffe) ^ chksum_sent;
-    logprintf(LOG_DEBUG, " chk_xor: %x (%x %x)\n",chk_xor,chksum_data, chksum_sent);
+    logprintf(LOG_DEBUG, "chk_xor: %x (%x %x)\n",chk_xor,chksum_data, chksum_sent);
 
 	signed int probe_1,probe_2;
 	probe_1 = calc_probe_temp(1, nibbles);
