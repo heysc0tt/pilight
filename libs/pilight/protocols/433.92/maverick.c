@@ -284,7 +284,11 @@ static void parseCode(void) {
     logprintf(LOG_DEBUG, "Parsing bits into nibbles.");
     char nibbles[NUM_NIBBLES];
 	parse_binary_data(bits, nibbles);
-	logprintf(LOG_DEBUG, "Nibbles: %s", nibbles);
+	
+	for(x=0; x<NUM_NIBBLES; x++) {
+		logprintf(LOG_DEBUG, "0x%01x ", nibbles[x]);
+	}
+
 	//Validate
 	if(validate_header(nibbles) != 0) {
 		logprintf(LOG_DEBUG, "The header doesn't match, skipping this message.");
@@ -329,7 +333,7 @@ static void parseCode(void) {
         chksum_sent |= (uint16_t) nibbles[24] << 2;
         chksum_sent |= (uint16_t) nibbles[25];
     }
-// 		chksum_sent |= (uint16_t) inv_quart(_str[25])<<2;
+// 		chksum_sent |= (uint16_t) inv_quart(nibbles[25])<<2;
 
     chk_xor = (chksum_data & 0xfffe) ^ chksum_sent;
     logprintf(LOG_DEBUG, "chk_xor: %x (%x %x)\n",chk_xor,chksum_data, chksum_sent);
