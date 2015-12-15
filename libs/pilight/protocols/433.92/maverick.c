@@ -58,9 +58,9 @@ static int validate(void) {
 	return -1;
 }
 
-static void createMessage(int foodTemp, int bbqTemp) {
+static void createMessage(int foodTemp, int bbqTemp, int id) {
 	maverick->message = json_mkobject();
-	json_append_member(maverick->message, "id", json_mknumber(1, 0));
+	json_append_member(maverick->message, "id", json_mknumber(id, 0));
 	json_append_member(maverick->message, "temperature", json_mknumber(foodTemp, 0));
 	json_append_member(maverick->message, "bbq", json_mknumber(bbqTemp, 0));
 }
@@ -71,7 +71,7 @@ static void storeMessage() {
 	mongoc_collection_t *collection;
 	bson_t              *bson;
 	bson_error_t        error;
-	// char                *str;
+
 
 	/*
     * Required to initialize libmongoc's internals
@@ -90,7 +90,7 @@ static void storeMessage() {
 	collection = mongoc_client_get_collection (client, "maverick", "temperatures");
 
 	// create bson from json
-	char *jsonStr = json_stringify(maverick->message, NULL);
+	uint8_t *jsonStr = json_stringify(maverick->message, NULL);
 	bson = bson_new_from_json (jsonStr, -1, &error);
 	json_free(jsonStr);
 
@@ -98,10 +98,6 @@ static void storeMessage() {
 		logprintf(LOG_ERR, "%s\n", error.message);
 		return;
 	}
-
-	// str = bson_as_json (bson, NULL);
-	// logprintf(LOG_DEBUG, "%s\n", str);
-	// bson_free (str);
 
 	// insert
 	if (!mongoc_collection_insert (collection, MONGOC_INSERT_NONE, bson, NULL, &error)) {
@@ -155,6 +151,21 @@ static int validate_header(char *rx_parsed)
     if(rx_parsed[5] != 0x05) {
     	return -1;
     }
+    if(rx_parsed[6] != 0x05 &&
+       rx_parsed[6] != 0x06) {
+       	logprintf(LOG_INFO, "index 6 wasnt 05 or 06, was: 0x%01x", rx_parsed[6]);
+    	return -1;
+    }
+    if(rx_parsed[6] == 0x05 &&
+       rx_parsed[7] != 0x09) {
+       	logprintf(LOG_INFO, "index 6 was 05 but 7 was not 09, was: 0x%01x", rx_parsed[7]);
+    	return -1;
+    }
+    if(rx_parsed[6] == 0x06 &&
+       rx_parsed[7] != 0x0A) {
+       	logprintf(LOG_INFO, "index 6 was 06 but 7 was not 0A, was: 0x%01x", rx_parsed[7]);
+    	return -1;
+    }
 
     return 0;
 }
@@ -170,15 +181,34 @@ uint16_t shiftreg(uint16_t currentValue) {
     return currentValue;
 }
 
-//data = binary representation of nibbles 6 - 17
-//e.g. xxxx:xxxx:xxxx:0010:1000:1010:0110:0101:0101:xxxx:xxxx:xxxx:xxxx
-//  -> uint32_t data = 0x28a655
-uint16_t calculate_checksum(uint32_t data) {
+static unsigned char quart(char rx_val) {
+	switch(rx_val){
+        case 0x05:
+            return 0;
+        case 0x06:
+            return 1;
+        case 0x09:
+            return 2;
+        case 0x0A:
+            return 3;
+        default:
+        	return 4; // hopefully this will not happen
+    }
+}
+
+uint16_t calculate_checksum(char *nibbles, uint32_t probe1, uint32_t probe2) {
+	uint32_t check_data;
     uint16_t mask = 0x3331; //initial value of linear feedback shift register
     uint16_t csum = 0x0;
+
+    check_data = quart(nibbles[6]) << 22;
+    check_data |= quart(nibbles[7]) << 20;
+    check_data |= (uint32_t) probe1 << 10;
+    check_data |= (uint32_t) probe2;
+
     int i = 0;
     for(i = 0; i < 24; ++i) {
-        if((data >> i) & 0x01) {
+        if((check_data >> i) & 0x01) {
            //data bit at current position is "1"
            //do XOR with mask
           csum ^= mask; 
@@ -188,78 +218,33 @@ uint16_t calculate_checksum(uint32_t data) {
     return csum;
 }
 
-//Calculate probe temperature in celsius
-static signed int calc_probe_temp(char which_probe, char *rx_parsed)
-{
-    int i, offset, probe_temp;
-    unsigned char   rx_quart[5];
-    
-    if(which_probe == 1)
-        offset = 8;
-    else
-        offset = 13;
-
-    //Parse data to quaternary
-    for(i=0;i<5;i++){
-        switch(rx_parsed[i+offset]){
-            case 0x05:
-                rx_quart[i] = 0;
-            break;
-            case 0x06:
-                rx_quart[i] = 1;
-            break;
-            case 0x09:
-                rx_quart[i] = 2;
-            break;
-            case 0x0A:
-                rx_quart[i] = 3;
-            break;
-        }
-    }
-    probe_temp = 0;
-    probe_temp += rx_quart[0] * 256;
-    probe_temp += rx_quart[1] * 64;
-    probe_temp += rx_quart[2] * 16;
-    probe_temp += rx_quart[3] * 4;
-    probe_temp += rx_quart[4] * 1;
-    probe_temp -= 532;
-    return probe_temp;
-}
-
-static void parseCode(void) {
-//	int binary[RAW_LENGTH/2], x = 0, i = 0;
-//	int id = -1, state = -1, unit = -1, systemcode = -1;
-	int x=0;
-	int values[maverick->rawlen];
-
-    uint32_t check_data;
-    uint32_t probe1=0, probe2=0;
-    uint16_t chksum_data, chksum_sent, chk_xor, chk_xor_expected=0;
-
-
-	for(x=0;x<maverick->rawlen;x++) {
-		if(maverick->raw[x] > MIN_LONG_PULSE) {
-//			printf("Long: %d\n", maverick->raw[x]);
-			values[x] = -1;
-		} else if(maverick->raw[x] > MAX_PULSE_LENGTH) {
-//			printf("Medium: %d\n", maverick->raw[x]);
-			values[x] = 1;
+static void pulsesToValues(int *values) {
+	int i;
+	for(i=0;i<maverick->rawlen;i++) {
+		if(maverick->raw[i] > MIN_LONG_PULSE) {
+			values[i] = -1;
+		} else if(maverick->raw[i] > MAX_PULSE_LENGTH) {
+			values[i] = 1;
 		} else {
-//			printf("Short: %d\n", maverick->raw[x]);
-			values[x] = 0;
+			values[i] = 0;
 		}
 	}
+}
+
+static void manchesterDecode(char *bitsArr) {
+	int values[maverick->rawlen];
+    pulsesToValues(values);
 
 	int previous_period_was_short = 0;
-	char bits[NUM_BITS]; // shouldnt need all these
-	unsigned int bit_index=1;
-	unsigned int current_bit = 1;
-	bits[0] = current_bit;
+	unsigned int bit_index=1; // start at index 1 because the first bit is always 1 
+	unsigned int current_bit = bitsArr[0] = 1;
+	int x;
+
 	for(x=0;x<maverick->rawlen;x++) {
 	    if (values[x] == 0) { // short pulse
 	      if (previous_period_was_short == 1) {
 	        // previous bit was short, add the current_bit value to the stream and continue to next incoming bit
-			bits[bit_index++] = current_bit;
+			bitsArr[bit_index++] = current_bit;
 	        previous_period_was_short = 0;
 	      }
 	      else {
@@ -277,18 +262,36 @@ static void parseCode(void) {
 	      current_bit = !current_bit;
 
 	      // add current_bit value to the stream and continue to next incoming bit
-		  bits[bit_index++] = current_bit;
+		  bitsArr[bit_index++] = current_bit;
 	    }
 	}		
+}
+
+static uint16_t getCheksum(char *nibbles) {
+	uint16_t chksum_sent;
+    chksum_sent =  (uint16_t) quart(nibbles[18]) << 14;
+    chksum_sent |= (uint16_t) quart(nibbles[19]) << 12;
+    chksum_sent |= (uint16_t) quart(nibbles[20]) << 10;
+    chksum_sent |= (uint16_t) quart(nibbles[21]) << 8;
+    chksum_sent |= (uint16_t) quart(nibbles[22]) << 6;
+    chksum_sent |= (uint16_t) quart(nibbles[23]) << 4;
+    chksum_sent |= (uint16_t) quart(nibbles[24]) << 2;
+    chksum_sent |= (uint16_t) quart(nibbles[25]);
+    return chksum_sent;
+}
+
+static void parseCode(void) {
+	int x=0;
+    uint32_t probe1=0, probe2=0;
+    uint16_t calculatedChecksum, messageChecksum, checksumXOR;
+	char bits[NUM_BITS]; // shouldnt need all these
+
+	manchesterDecode(bits);
 
     logprintf(LOG_DEBUG, "Parsing bits into nibbles.");
     char nibbles[NUM_NIBBLES];
 	parse_binary_data(bits, nibbles);
 	
-	for(x=0; x<NUM_NIBBLES; x++) {
-		logprintf(LOG_DEBUG, "0x%01x ", nibbles[x]);
-	}
-
 	//Validate
 	if(validate_header(nibbles) != 0) {
 		logprintf(LOG_DEBUG, "The header doesn't match, skipping this message.");
@@ -297,55 +300,30 @@ static void parseCode(void) {
 
     for(x=0; x<=4; x++)
     {
-        probe1 += nibbles[12-x] * (1<<(2*x));
-        probe2 += nibbles[17-x] * (1<<(2*x));
+        probe1 += quart(nibbles[12-x]) * (1<<(2*x));
+        probe2 += quart(nibbles[17-x]) * (1<<(2*x));
     }
 
-//     printf("%x %x ",probe1,probe2);
-    check_data = nibbles[6] << 22;
-//     printf("%x ", check_data);
-    check_data |= nibbles[7] << 20;
-//     printf("%x ", check_data);
-    check_data |= (uint32_t) probe1 << 10;
-//     printf("%x ", check_data);
-    check_data |= (uint32_t) probe2;
-//     printf("%x ", check_data);
-    chksum_data = calculate_checksum(check_data);
+    calculatedChecksum = calculate_checksum(nibbles, probe1, probe2);
+    messageChecksum = getCheksum(nibbles);
 
+    checksumXOR = calculatedChecksum ^ messageChecksum;
 
-    chksum_sent = (uint16_t) nibbles[18] << 14;
-    chksum_sent |= (uint16_t) nibbles[19] << 12;
-    chksum_sent |= (uint16_t) nibbles[20] << 10;
-    chksum_sent |= (uint16_t) nibbles[21] << 8;
-    chksum_sent |= (uint16_t) nibbles[22] << 6;
-    chksum_sent |= (uint16_t) nibbles[23] << 4;
-
-    if(nibbles[24]=='1' || nibbles[24]=='2')
-    {
-        chksum_sent |= (uint16_t) ((nibbles[25])&1)<<3;
-        chksum_sent |= (uint16_t) ((nibbles[25])&2)<<1;
-
-        if(nibbles[24]=='1')
-            chksum_sent |= 0x02;
+    if(nibbles[6] == 0x06 &&
+       nibbles[7] != 0x0A) {
+       	logprintf(LOG_INFO, "Updating checksumXOR to: %x", checksumXOR);
+       checksumXOR_expected = checksumXOR;
     }
-    else
-    {
-        chksum_sent |= (uint16_t) nibbles[24] << 2;
-        chksum_sent |= (uint16_t) nibbles[25];
-    }
-// 		chksum_sent |= (uint16_t) inv_quart(nibbles[25])<<2;
 
-    chk_xor = (chksum_data & 0xfffe) ^ chksum_sent;
-    logprintf(LOG_DEBUG, "chk_xor: %x (%x %x)\n",chk_xor,chksum_data, chksum_sent);
+    logprintf(LOG_DEBUG, "checksumXOR: %x (%x %x)\n",checksumXOR, calculatedChecksum, messageChecksum);
 
-	signed int probe_1,probe_2;
-	probe_1 = calc_probe_temp(1, nibbles);
-	probe_2 = calc_probe_temp(2, nibbles);
+	probe1 -= 532;
+	probe2 -= 532;
 
-	logprintf(LOG_DEBUG, "Probe 1: %d\n", probe_1);
-	logprintf(LOG_DEBUG, "Probe 2: %d\n", probe_2);
+	logprintf(LOG_INFO, "Probe 1: %d\n", probe1);
+	logprintf(LOG_INFO, "Probe 2: %d\n", probe2);
 
-	createMessage(probe_1, probe_2);
+	createMessage(probe1, probe2, checksumXOR);
 	storeMessage();
 }
 
@@ -379,9 +357,9 @@ void maverickInit(void) {
 	// options_add(&maverick->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 	// options_add(&maverick->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-7])$");
 	// options_add(&maverick->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,4}|1[0-6][0-9]{3})$");
-	options_add(&maverick->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-3])$");
+	options_add(&maverick->options, 'i', "id",          OPTION_HAS_VALUE, DEVICES_ID,    JSON_NUMBER, NULL, "^([0-9]+)$");
 	options_add(&maverick->options, 't', "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
-	options_add(&maverick->options, 'b', "bbq", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
+	options_add(&maverick->options, 'b', "bbq",         OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
 
 	options_add(&maverick->options, 0, "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
 
