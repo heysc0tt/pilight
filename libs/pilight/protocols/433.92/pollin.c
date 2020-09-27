@@ -61,6 +61,11 @@ static void createMessage(int systemcode, int unitcode, int state) {
 static void parseCode(void) {
 	int binary[RAW_LENGTH/4], x = 0, i = 0;
 
+	if(pollin->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "pollin: parsecode - invalid parameter passed %d", pollin->rawlen);
+		return;
+	}
+
 	for(x=0;x<pollin->rawlen-2;x+=4) {
 		if(pollin->raw[x+3] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
 			binary[i++] = 1;
@@ -197,13 +202,13 @@ void pollinInit(void) {
 	pollin->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	pollin->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&pollin->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&pollin->options, 'u', "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&pollin->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&pollin->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&pollin->options, "s", "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&pollin->options, "u", "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&pollin->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&pollin->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 
-	options_add(&pollin->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&pollin->options, 0, "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&pollin->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&pollin->options, "0", "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	pollin->parseCode=&parseCode;
 	pollin->createCode=&createCode;
@@ -214,7 +219,7 @@ void pollinInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "pollin";
-	module->version = "2.3";
+	module->version = "2.4";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

@@ -12,6 +12,7 @@ var aMarqueueInterval = new Array();
 var aReadOnly = new Array();
 var aStates = new Array();
 var bShowTabs = true;
+var bStatsEnabled = true;
 var iPLVersion = 0;
 var iPLNVersion = 0;
 var iFWVersion = 0;
@@ -19,7 +20,7 @@ var aTimers = new Array();
 var sDateTimeFormat = "HH:mm:ss YYYY-MM-DD";
 var aDateTimeFormats = new Array();
 var aWebcamUrl = new Array();
-var aDecimalTypes = ["temperature", "humidity", "wind", "pressure", "sunriseset"];
+var aDecimalTypes = ["temperature", "humidity", "wind", "pressure", "sunriseset", "illuminance"];
 var userLang = navigator.language || navigator.userLanguage;
 var language;
 
@@ -152,7 +153,7 @@ function toggleTabs() {
 			'text': '',
 			'textVisible': true,
 			'theme': 'b'
-		});		
+		});
 		window.setTimeout(function() {
 			document.location = document.location;
 		}, 1000);
@@ -310,7 +311,7 @@ function createPendingSwitchElement(sTabId, sDevId, aValues) {
 			$('#'+sDevId+'_pendingsw').button('disable');
 			$('#'+sDevId+'_pendingsw').text(language.toggling);
 			$('#'+sDevId+'_pendingsw').button('refresh');
-			
+
 			if(oWebsocket) {
 				var json = '{"action":"control","code":{"device":"'+sDevId+'","state":"'+((aStates[sDevId] == "off") ? "on" : "off")+'"}}';
 				oWebsocket.send(json);
@@ -461,7 +462,7 @@ function createDimmerElement(sTabId, sDevId, aValues) {
 			oTab = $('#all');
 		}
 		if('name' in aValues && 'dimlevel-minimum' in aValues && 'dimlevel-maximum' in aValues) {
-			oTab.append($('<li id="'+sDevId+'" class="dimmer" data-icon="false"><div class="name">'+aValues['name']+'</div><select id="'+sDevId+'_switch" data-role="slider"><option value="off">'+language.off+'</option><option value="on">'+language.on+'</option></select><div id="'+sDevId+'_dimmer" min="'+aValues['dimlevel-minimum']+'" max="'+aValues['dimlevel-maximum']+'" data-highlight="true" ><input type="value" id="'+sDevId+'_value" class="slider-value dimmer-slider ui-slider-input ui-input-text ui-body-c ui-corner-all ui-shadow-inset" /></div></li>'));
+			oTab.append($('<li id="'+sDevId+'" class="dimmer" data-icon="false"><div class="name">'+aValues['name']+'</div><select id="'+sDevId+'_switch" data-role="slider"><option value="off">'+language.off+'</option><option value="on">'+language.on+'</option></select><div id="'+sDevId+'_dimmer" min="'+aValues['dimlevel-minimum']+'" max="'+aValues['dimlevel-maximum']+'" data-highlight="true" ><input type="value" id="'+sDevId+'_value" class="slider-value dimmer-slider ui-slider-input ui-input-text ui-body-c ui-corner-all ui-shadow-inset" disabled="true"/></div></li>'));
 		}
 		$('#'+sDevId+'_switch').slider();
 		$('#'+sDevId+'_switch').bind("change", function(event, ui) {
@@ -480,17 +481,21 @@ function createDimmerElement(sTabId, sDevId, aValues) {
 
 			if(oWebsocket) {
 				if('all' in aValues && aValues['all'] == 1) {
-					var json = '{"action":"control","code":{"device":"'+sDevId+'","state":"'+this.value+'","values":{"all": 1}}}';
+					var json = '{"action":"control","code":{"device":"'+sDevId+'","state":"'+this.value+'","values":{"all":1,"dimlevel":'+$('#'+sDevId+'_dimmer').val()+'}}}';
 				} else {
-					var json = '{"action":"control","code":{"device":"'+sDevId+'","state":"'+this.value+'"}}';
+					if(this.value == "on") {
+						var json = '{"action":"control","code":{"device":"'+sDevId+'","state":"'+this.value+'","values":{"dimlevel":'+$('#'+sDevId+'_dimmer').val()+'}}}';
+					} else {
+						var json = '{"action":"control","code":{"device":"'+sDevId+'","state":"'+this.value+'"}}';
+					}
 				}
 				oWebsocket.send(json);
 			} else {
 				bSending = true;
 				if('all' in aValues && aValues['all'] == 1) {
-					$.get(sHTTPProtocol+'://'+location.host+'/control?device='+sDevId+'&state='+this.value+'&values[all]=1');
+					$.get(sHTTPProtocol+'://'+location.host+'/control?device='+sDevId+'&state='+this.value+'&values[all]=1&values[dimlevel]='+$('#'+sDevId+'_dimmer').val());
 				} else {
-					$.get(sHTTPProtocol+'://'+location.host+'/control?device='+sDevId+'&state='+this.value);
+					$.get(sHTTPProtocol+'://'+location.host+'/control?device='+sDevId+'&state='+this.value+'&values[dimlevel]='+$('#'+sDevId+'_dimmer').val());
 				}
 				window.setTimeout(function() { bSending = false; }, 1000);
 			}
@@ -561,10 +566,10 @@ function createWeatherElement(sTabId, sDevId, aValues) {
 			oTab = $('#all');
 		}
 		if('name' in aValues) {
-			oTab.append($('<li class="weather" id="'+sDevId+'_weather" data-icon="false"><div class="name">'+aValues['name']+'</div></li>'));
+			oTab.append($('<li class="weather" id="'+sDevId+'_weather" data-icon="false"><div class="name">'+aValues['name']+'</div><div class="weather_values" id="'+sDevId+'_weather_values" /></li>'));
 		}
 		if('show-update' in aValues && aValues['show-update']) {
-			oTab.find('#'+sDevId+'_weather').append($('<div class="update_inactive" id="'+sDevId+'_upd" title="'+language.update+'">&nbsp;</div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div class="update_inactive" id="'+sDevId+'_upd" title="'+language.update+'">&nbsp;</div>'));
 			$('#'+sDevId+'_upd').click(function() {
 				if(this.className.indexOf('update_active') == 0) {
 					if(oWebsocket) {
@@ -579,30 +584,33 @@ function createWeatherElement(sTabId, sDevId, aValues) {
 			});
 		}
 		if('show-battery' in aValues && aValues['show-battery'] && 'battery' in aValues) {
-			oTab.find('#'+sDevId+'_weather').append($('<div id="'+sDevId+'_batt" class="battery green"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div id="'+sDevId+'_batt" class="battery green"></div>'));
 		}
 		if('show-rain' in aValues && aValues['show-rain']) {
-			oTab.find('#'+sDevId+'_weather').append($('<div class="rain_icon"></div><div class="rain" id="'+sDevId+'_rain"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div class="rain_icon"></div><div class="rain" id="'+sDevId+'_rain"></div>'));
 		}
 		if('show-wind' in aValues && aValues['show-wind']) {
-			oTab.find('#'+sDevId+'_weather').append($('<div class="windavg_icon"></div><div class="windavg" id="'+sDevId+'_windavg"></div>'));
-			oTab.find('#'+sDevId+'_weather').append($('<div class="windgust_icon"></div><div class="winddir_icon" id="'+sDevId+'_winddir"></div><div class="windgust" id="'+sDevId+'_windgust"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div class="windavg_icon"></div><div class="windavg" id="'+sDevId+'_windavg"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div class="windgust_icon"></div><div class="winddir_icon" id="'+sDevId+'_winddir"></div><div class="windgust" id="'+sDevId+'_windgust"></div>'));
 			$('#'+sDevId+'_weather .winddir_icon').css({transform: 'rotate(' + aValues['winddir'] + 'deg)'});
 		}
 		if('show-humidity' in aValues && aValues['show-humidity']) {
-			oTab.find('#'+sDevId+'_weather').append($('<div class="humidity_icon"></div><div class="humidity" id="'+sDevId+'_humi"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div class="humidity_icon"></div><div class="humidity" id="'+sDevId+'_humi"></div>'));
 		}
 		if('show-temperature' in aValues && aValues['show-temperature']) {
-			oTab.find('#'+sDevId+'_weather').append($('<div class="temperature_icon"></div><div class="temperature" id="'+sDevId+'_temp"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div class="temperature_icon"></div><div class="temperature" id="'+sDevId+'_temp"></div>'));
 		}
 		if('show-pressure' in aValues && aValues['show-pressure']) {
-			oTab.find('#'+sDevId+'_weather').append($('<div class="pressure_icon"></div><div class="pressure" id="'+sDevId+'_pres"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div class="pressure_icon"></div><div class="pressure" id="'+sDevId+'_pres"></div>'));
 		}
 		if('show-sunriseset' in aValues && aValues['show-sunriseset']) {
-			oTab.find('#'+sDevId+'_weather').append($('<div id="'+sDevId+'_sunset_icon" class="sunset_icon"></div><div class="sunset" id="'+sDevId+'_sunset"></div>'));
-			oTab.find('#'+sDevId+'_weather').append($('<div id="'+sDevId+'_sunrise_icon" class="sunrise_icon"></div><div class="sunrise" id="'+sDevId+'_sunrise"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div id="'+sDevId+'_sunset_icon" class="sunset_icon"></div><div class="sunset" id="'+sDevId+'_sunset"></div>'));
+			oTab.find('#'+sDevId+'_weather_values').append($('<div id="'+sDevId+'_sunrise_icon" class="sunrise_icon"></div><div class="sunrise" id="'+sDevId+'_sunrise"></div>'));
 			$('#'+sDevId+'_sunrise_icon').addClass('yellow');
 			$('#'+sDevId+'_sunset_icon').addClass('gray');
+		}
+		if('show-illuminance' in aValues && aValues['show-illuminance']) {
+			oTab.find('#'+sDevId+'_weather').append($('<div class="illuminance_icon"></div><div class="illuminance" id="'+sDevId+'_illu"></div>'));
 		}
 	}
 	oTab.listview();
@@ -804,7 +812,7 @@ function createGUI(data) {
 	$('#tabs').append($("<ul></ul>"));
 	$.each(data['gui'], function(dindex, dvalues) {
 		var lindex = dvalues['group'][0];
-		if(oWebsocket) {
+		if(oWebsocket && bStatsEnabled) {
 			$('#proc').text("CPU: ...% / RAM: ...%");
 		}
 		if($('#'+alphaNum(lindex)).length == 0) {
@@ -921,6 +929,7 @@ function parseValues(data) {
 					}
 					if(vindex == 'dimlevel') {
 						aDimLevel[dvalues] = vvalues;
+						$('#'+dvalues+'_value').val(vvalues);
 						$('#'+dvalues+'_dimmer').val(vvalues);
 						$('#'+dvalues+'_dimmer').slider('refresh');
 					}
@@ -1016,6 +1025,10 @@ function parseValues(data) {
 					} else if(vindex == 'sunset' && $('#'+dvalues+'_sunset').length > 0) {
 						if(dvalues in aDecimals) {
 							$('#'+dvalues+'_sunset').text(vvalues.toFixed(aDecimals[dvalues]['sunriseset']));
+						}
+					} else if(vindex == 'illuminance' && $('#'+dvalues+'_illu').length > 0) {
+						if(dvalues in aDecimals) {
+							$('#'+dvalues+'_illu').text(vvalues.toFixed(aDecimals[dvalues]['illuminance']));
 						}
 					} else if(vindex == 'battery' && $('#'+dvalues+'_batt').length > 0) {
 						if(vvalues == 1) {
@@ -1128,23 +1141,21 @@ function parseValues(data) {
 }
 
 function parseData(data) {
-	if(data.hasOwnProperty("gui") && data.hasOwnProperty("devices")) {
-		createGUI(data);
-		if('registry' in data && 'pilight' in data['registry']) {
-			if('version' in data['registry']['pilight']) {
-				if('current' in data['registry']['pilight']['version']) {
-					iPLVersion = data['registry']['pilight']['version']['current'];
+	if(data.hasOwnProperty("config")) {
+		config = data['config'];
+		if(config.hasOwnProperty("gui") && config.hasOwnProperty("devices")) {
+			createGUI(config);
+			if('registry' in config && 'pilight' in config['registry']) {
+				if('version' in config['registry']['pilight']) {
+					if('current' in config['registry']['pilight']['version']) {
+						iPLVersion = config['registry']['pilight']['version']['current'];
+					}
+					if('available' in config['registry']['pilight']['version']) {
+						iNPLVersion = config['registry']['pilight']['version']['available'];
+					}
 				}
-				if('available' in data['registry']['pilight']['version']) {
-					iNPLVersion = data['registry']['pilight']['version']['available'];
-				}
+				updateVersions();
 			}
-			if('firmware' in data['registry']['pilight']) {
-				if('version' in data['registry']['pilight']['firmware']) {
-					iFWVersion = data['registry']['pilight']['firmware']['version'];
-				}
-			}
-			updateVersions();
 		}
 		if(oWebsocket) {
 			oWebsocket.send("{\"action\":\"request values\"}");
@@ -1155,14 +1166,10 @@ function parseData(data) {
 		} else if(data['origin'] == "core") {
 			if(data['type'] == -1) {
 				updateProcStatus(data['values']);
-			} else if(data['type'] == -2) {
-				iFWVersion = data['values']['version'];
-				updateVersions();
 			}
 		}
-	} else if(data.constructor === Array &&
-			data[0]['devices'].length > 0) {
-		$.each(data, function(dindex, dvalues) {
+	} else if(data.hasOwnProperty("values")) {
+		$.each(data['values'], function(dindex, dvalues) {
 			parseValues(dvalues);
 		});
 	}
@@ -1284,13 +1291,13 @@ $(document).ready(function() {
 		/* Use an AJAX request to check if the user want to enforce
 		   an AJAX connection, or if he wants to use websockets */
 		$.get(sHTTPProtocol+'://'+location.host+'/config?internal&'+$.now(), function(txt) {
-			var data = $.parseJSON(txt);
+			var data = $.parseJSON(JSON.stringify(txt));
 			if('registry' in data) {
 				if('webgui' in data['registry'] &&
 					'tabs' in data['registry']['webgui']) {
 					bShowTabs = data['registry']['webgui']['tabs'];
 				}
-	
+
 				if(sHTTPProtocol == "https") {
 					if('webserver' in data['registry'] &&
 						 'ssl' in data['registry']['webserver'] &&
@@ -1314,6 +1321,9 @@ $(document).ready(function() {
 				}
 			} else {
 				startWebsockets();
+			}
+			if('settings' in data && 'stats-enable' in data['settings']) {
+				bStatsEnabled = data['settings']['stats-enable'];
 			}
 		});
 

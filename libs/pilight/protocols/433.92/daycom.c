@@ -63,6 +63,11 @@ static void parseCode(void) {
 	int binary[RAW_LENGTH/2], x = 0, i = 0;
 	int id = -1, state = -1, unit = -1, systemcode = -1;
 
+	if(daycom->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "daycom: parsecode - invalid parameter passed %d", daycom->rawlen);
+		return;
+	}
+
 	for(x=0;x<daycom->rawlen;x+=2) {
 		if(daycom->raw[x] > AVG_PULSE_LENGTH*(PULSE_MULTIPLIER/2)) {
 			binary[i++] = 1;
@@ -219,13 +224,13 @@ void daycomInit(void) {
 	daycom->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	daycom->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&daycom->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&daycom->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&daycom->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-7])$");
-	options_add(&daycom->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,4}|1[0-6][0-9]{3})$");
-	options_add(&daycom->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^[0-6]?[0-9]$");
+	options_add(&daycom->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&daycom->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&daycom->options, "u", "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-7])$");
+	options_add(&daycom->options, "s", "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,4}|1[0-6][0-9]{3})$");
+	options_add(&daycom->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^[0-6]?[0-9]$");
 
-	options_add(&daycom->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&daycom->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	daycom->parseCode=&parseCode;
 	daycom->createCode=&createCode;
@@ -235,7 +240,7 @@ void daycomInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "daycom";
-	module->version = "1.0";
+	module->version = "1.1";
 	module->reqversion = "6.0";
 	module->reqcommit = "187";
 }

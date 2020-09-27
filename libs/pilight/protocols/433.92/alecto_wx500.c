@@ -70,7 +70,12 @@ static void parseCode(void) {
 	int n4 = 0, n5 = 0, n6 = 0, n7 = 0, n8 = 0;
 	int checksum = 1;
 
-	for(x=1;x<alecto_wx500->rawlen-1;x+=2) {
+	if(alecto_wx500->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "alecto_wx500: parsecode - invalid parameter passed %d", alecto_wx500->rawlen);
+		return;
+	}
+
+	for(x=1;x<alecto_wx500->rawlen;x+=2) {
 		if(alecto_wx500->raw[x] > AVG_PULSE) {
 			binary[i++] = 1;
 		} else {
@@ -78,7 +83,7 @@ static void parseCode(void) {
 		}
 	}
 
-	n8=binToDec(binary, 32, 36);
+	n8=binToDec(binary, 32, 35);
 	n7=binToDec(binary, 28, 31);
 	n6=binToDec(binary, 24, 27);
 	n5=binToDec(binary, 20, 23);
@@ -139,7 +144,7 @@ static void parseCode(void) {
 	switch(type) {
 		case 1:
 			id = binToDec(binary, 0, 7);
-			temperature = (double)(binToDec(binary, 12, 22))/10.0;
+			temperature = (double)(binToSigned(binary, 12, 23)) / 10.0;
 			humidity = (binToDec(binary, 28, 31) * 10) + binToDec(binary, 24,27);
 			battery = !binary[8];
 
@@ -270,26 +275,26 @@ void alectoWX500Init(void) {
 	alecto_wx500->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	alecto_wx500->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&alecto_wx500->options, 't', "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	options_add(&alecto_wx500->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "[0-9]");
-	options_add(&alecto_wx500->options, 'b', "battery", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "[0-9]");
-	options_add(&alecto_wx500->options, 'h', "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	options_add(&alecto_wx500->options, 'w', "windavg", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	options_add(&alecto_wx500->options, 'd', "winddir", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	options_add(&alecto_wx500->options, 'g', "windgust", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	//options_add(&alecto_wx500->options, 'r', "rain", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&alecto_wx500->options, "t", "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&alecto_wx500->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "[0-9]");
+	options_add(&alecto_wx500->options, "b", "battery", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "[0-9]");
+	options_add(&alecto_wx500->options, "h", "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&alecto_wx500->options, "w", "windavg", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&alecto_wx500->options, "d", "winddir", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&alecto_wx500->options, "g", "windgust", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	//options_add(&alecto_wx500->options, "r", "rain", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
 
-	// options_add(&alecto_wx500->options, 0, "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&alecto_wx500->options, 0, "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&alecto_wx500->options, 0, "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&alecto_wx500->options, 0, "wind-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&alecto_wx500->options, 0, "humidity-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
-	options_add(&alecto_wx500->options, 0, "temperature-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
-	options_add(&alecto_wx500->options, 0, "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	options_add(&alecto_wx500->options, 0, "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	options_add(&alecto_wx500->options, 0, "show-battery", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	options_add(&alecto_wx500->options, 0, "show-wind", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	//options_add(&alecto_wx500->options, 0, "show-rain", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	// options_add(&alecto_wx500->options, "0", "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&alecto_wx500->options, "0", "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&alecto_wx500->options, "0", "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&alecto_wx500->options, "0", "wind-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&alecto_wx500->options, "0", "humidity-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
+	options_add(&alecto_wx500->options, "0", "temperature-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
+	options_add(&alecto_wx500->options, "0", "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	options_add(&alecto_wx500->options, "0", "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	options_add(&alecto_wx500->options, "0", "show-battery", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	options_add(&alecto_wx500->options, "0", "show-wind", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	//options_add(&alecto_wx500->options, "0", "show-rain", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	alecto_wx500->parseCode=&parseCode;
 	alecto_wx500->checkValues=&checkValues;
@@ -300,7 +305,7 @@ void alectoWX500Init(void) {
 #ifdef MODULAR
 void compatibility(const char **version, const char **commit) {
 	module->name = "alecto_wx500";
-	module->version = "1.0";
+	module->version = "1.2";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

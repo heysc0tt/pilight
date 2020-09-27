@@ -31,8 +31,10 @@
 	#ifdef __mips__
 		#define __USE_UNIX98
 	#endif
+	#include <wiringx.h>
 #endif
 #include <pthread.h>
+#include <assert.h>
 
 #include "../../core/pilight.h"
 #include "../../core/common.h"
@@ -42,13 +44,13 @@
 #include "../../core/binary.h"
 #include "../../core/gc.h"
 #include "../../core/json.h"
+#include "../../config/settings.h"
 #include "../protocol.h"
 #include "dht11.h"
 
 #define MAXTIMINGS 100
 
 #if !defined(__FreeBSD__) && !defined(_WIN32)
-#include "../../../wiringx/wiringX.h"
 
 static unsigned short loop = 1;
 static unsigned short threads = 0;
@@ -110,14 +112,14 @@ static void *dht11Parse(void *param) {
 					int dht11_dat[5] = {0,0,0,0,0};
 
 					// pull pin down for 18 milliseconds
-					pinMode(id[y], OUTPUT);
+					pinMode(id[y], PINMODE_OUTPUT);
 					digitalWrite(id[y], HIGH);
 					usleep(500000);  // 500 ms
 					// then pull it up for 40 microseconds
 					digitalWrite(id[y], LOW);
 					usleep(20000);
 					// prepare to read the pin
-					pinMode(id[y], INPUT);
+					pinMode(id[y], PINMODE_INPUT);
 
 					// detect change and read data
 					for(i=0; (i<MAXTIMINGS && loop); i++) {
@@ -191,7 +193,28 @@ static void *dht11Parse(void *param) {
 }
 
 static struct threadqueue_t *initDev(JsonNode *jdevice) {
-	if(wiringXSupported() == 0 && wiringXSetup() == 0) {
+	struct lua_state_t *state = plua_get_free_state();
+	char *platform = GPIO_PLATFORM;
+
+	if(config_setting_get_string(state->L, "gpio-platform", 0, &platform) != 0) {
+		logprintf(LOG_ERR, "no gpio-platform configured");
+		assert(lua_gettop(state->L) == 0);
+		plua_clear_state(state);
+		return NULL;
+	}
+	assert(lua_gettop(state->L) == 0);
+	plua_clear_state(state);
+	if(strcmp(platform, "none") == 0) {
+		FREE(platform);
+		logprintf(LOG_ERR, "no gpio-platform configured");
+		return NULL;
+	}
+	if(wiringXSetup(platform, logprintf1) < 0) {
+		FREE(platform);
+		return NULL;
+	} else {
+		FREE(platform);
+
 		loop = 1;
 		char *output = json_stringify(jdevice, NULL);
 		JsonNode *json = json_decode(output);
@@ -199,8 +222,6 @@ static struct threadqueue_t *initDev(JsonNode *jdevice) {
 
 		struct protocol_threads_t *node = protocol_thread_init(dht11, json);
 		return threads_register("dht11", &dht11Parse, (void *)node, 0);
-	} else {
-		return NULL;
 	}
 }
 
@@ -222,13 +243,29 @@ static int checkValues(JsonNode *code) {
 	if((jid = json_find_member(code, "id")) != NULL) {
 		if((jchild = json_find_element(jid, 0)) != NULL) {
 			if(json_find_number(jchild, "gpio", &itmp) == 0) {
-				if(wiringXSupported() == 0) {
+				char *platform = GPIO_PLATFORM;
+
+				struct lua_state_t *state = plua_get_free_state();
+				if(config_setting_get_string(state->L, "gpio-platform", 0, &platform) != 0) {
+					logprintf(LOG_ERR, "no gpio-platform configured");
+					assert(plua_check_stack(state->L, 0) == 0);
+					plua_clear_state(state);
+					return -1;
+				}
+				assert(lua_gettop(state->L) == 0);
+				plua_clear_state(state);
+				if(strcmp(platform, "none") == 0) {
+					FREE(platform);
+					logprintf(LOG_ERR, "no gpio-platform configured");
+					return -1;
+				}
+				if(wiringXSetup(platform, logprintf1) < 0) {
+					FREE(platform);
+					return -1;
+				} else {
 					int gpio = (int)itmp;
-					if(wiringXSetup() < 0) {
-						logprintf(LOG_ERR, "unable to setup wiringX") ;
-						return -1;
-					} else if(wiringXValidGPIO(gpio) != 0) {
-						logprintf(LOG_ERR, "relay: invalid gpio range");
+					if(wiringXValidGPIO(gpio) != 0) {
+						logprintf(LOG_ERR, "dht11: invalid gpio range");
 						return -1;
 					}
 				}
@@ -256,18 +293,18 @@ void dht11Init(void) {
 	dht11->devtype = WEATHER;
 	dht11->hwtype = SENSOR;
 
-	options_add(&dht11->options, 't', "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	options_add(&dht11->options, 'h', "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	options_add(&dht11->options, 'g', "gpio", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, NULL);
+	options_add(&dht11->options, "t", "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&dht11->options, "h", "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&dht11->options, "g", "gpio", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, NULL);
 
-	// options_add(&dht11->options, 0, "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&dht11->options, 0, "temperature-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
-	options_add(&dht11->options, 0, "humidity-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
-	options_add(&dht11->options, 0, "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&dht11->options, 0, "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&dht11->options, 0, "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	options_add(&dht11->options, 0, "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	options_add(&dht11->options, 0, "poll-interval", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)10, "[0-9]");
+	// options_add(&dht11->options, "0", "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&dht11->options, "0", "temperature-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
+	options_add(&dht11->options, "0", "humidity-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
+	options_add(&dht11->options, "0", "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&dht11->options, "0", "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&dht11->options, "0", "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	options_add(&dht11->options, "0", "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	options_add(&dht11->options, "0", "poll-interval", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)10, "[0-9]");
 
 #if !defined(__FreeBSD__) && !defined(_WIN32)
 	dht11->initDev=&initDev;
@@ -279,9 +316,9 @@ void dht11Init(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "dht11";
-	module->version = "2.4";
-	module->reqversion = "6.0";
-	module->reqcommit = "84";
+	module->version = "2.5";
+	module->reqversion = "7.0";
+	module->reqcommit = "186";
 }
 
 void init(void) {

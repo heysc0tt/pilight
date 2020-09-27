@@ -65,6 +65,11 @@ static void parseCode(void) {
 	int i = 0, x = 0, binary[RAW_LENGTH/2];
 	int id = 0, state = 0, unit = 0, all = 0;
 
+	if(cleverwatts->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "cleverwatts: parsecode - invalid parameter passed %d", cleverwatts->rawlen);
+		return;
+	}
+
 	for(x=1;x<cleverwatts->rawlen-1;x+=2) {
 		if(cleverwatts->raw[x] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
 			binary[i++] = 1;
@@ -214,14 +219,14 @@ void cleverwattsInit(void) {
 	cleverwatts->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	cleverwatts->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&cleverwatts->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&cleverwatts->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&cleverwatts->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-3])$");
-	options_add(&cleverwatts->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,6}|10([0-3][0-9]{4}|4([0-7][0-9]{3}|8([0-4][0-9]{2}|5([0-6][0-9]|7[0-5])))))$");
-	options_add(&cleverwatts->options, 'a', "all", OPTION_OPT_VALUE, DEVICES_OPTIONAL, JSON_NUMBER, NULL, NULL);
+	options_add(&cleverwatts->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&cleverwatts->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&cleverwatts->options, "u", "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-3])$");
+	options_add(&cleverwatts->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,6}|10([0-3][0-9]{4}|4([0-7][0-9]{3}|8([0-4][0-9]{2}|5([0-6][0-9]|7[0-5])))))$");
+	options_add(&cleverwatts->options, "a", "all", OPTION_OPT_VALUE, DEVICES_OPTIONAL, JSON_NUMBER, NULL, NULL);
 
-	options_add(&cleverwatts->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&cleverwatts->options, 0, "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&cleverwatts->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&cleverwatts->options, "0", "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	cleverwatts->parseCode=&parseCode;
 	cleverwatts->createCode=&createCode;
@@ -232,7 +237,7 @@ void cleverwattsInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "cleverwatts";
-	module->version = "1.0";
+	module->version = "1.1";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

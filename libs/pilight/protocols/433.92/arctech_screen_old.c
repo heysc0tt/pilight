@@ -30,7 +30,7 @@
 #include "../../core/gc.h"
 #include "arctech_screen_old.h"
 
-#define PULSE_MULTIPLIER	5
+#define PULSE_MULTIPLIER	3
 #define MIN_PULSE_LENGTH	310
 #define MAX_PULSE_LENGTH	350
 #define AVG_PULSE_LENGTH	335
@@ -60,6 +60,11 @@ static void createMessage(int id, int unit, int state) {
 static void parseCode(void) {
 	int binary[RAW_LENGTH/4], x = 0, i = 0;
 	int len = (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2));
+
+	if(arctech_screen_old->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "arctech_screen_old: parsecode - invalid parameter passed %d", arctech_screen_old->rawlen);
+		return;
+	}
 
 	for(x=0;x<arctech_screen_old->rawlen-2;x+=4) {
 		if(arctech_screen_old->raw[x+3] > len) {
@@ -199,13 +204,13 @@ void arctechScreenOldInit(void) {
 	arctech_screen_old->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	arctech_screen_old->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&arctech_screen_old->options, 't', "up", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&arctech_screen_old->options, 'f', "down", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&arctech_screen_old->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1}|[1][0-5])$");
-	options_add(&arctech_screen_old->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&arctech_screen_old->options, "t", "up", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&arctech_screen_old->options, "f", "down", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&arctech_screen_old->options, "u", "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1}|[1][0-5])$");
+	options_add(&arctech_screen_old->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
 
-	options_add(&arctech_screen_old->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&arctech_screen_old->options, 0, "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&arctech_screen_old->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&arctech_screen_old->options, "0", "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	arctech_screen_old->parseCode=&parseCode;
 	arctech_screen_old->createCode=&createCode;
@@ -216,7 +221,7 @@ void arctechScreenOldInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "arctech_screen_old";
-	module->version = "2.4";
+	module->version = "2.5";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

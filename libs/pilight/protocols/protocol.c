@@ -19,15 +19,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <dirent.h>
-#include <sys/time.h>
+#include <assert.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #ifndef _WIN32
 	#ifdef __mips__
 		#define __USE_UNIX98
 	#endif
 #endif
 #include <pthread.h>
+#include <assert.h>
 
 #include "../core/pilight.h"
 #include "../core/common.h"
@@ -38,7 +39,12 @@
 #include "../config/settings.h"
 
 #include "protocol.h"
-#include "protocol_header.h"
+#include "433.92/protocol_header.h"
+#include "API/protocol_header.h"
+#include "generic/protocol_header.h"
+#include "GPIO/protocol_header.h"
+#include "network/protocol_header.h"
+#include "core/protocol_header.h"
 
 struct protocols_t *protocols;
 
@@ -93,7 +99,12 @@ void protocol_remove(char *name) {
 void protocol_init(void) {
 	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
 
-	#include "protocol_init.h"
+	#include "433.92/protocol_init.h"
+	#include "API/protocol_init.h"
+	#include "generic/protocol_init.h"
+	#include "GPIO/protocol_init.h"
+	#include "network/protocol_init.h"
+	#include "core/protocol_init.h"
 
 #ifndef _WIN32
 	void *handle = NULL;
@@ -103,8 +114,8 @@ void protocol_init(void) {
 	struct module_t module;
 	char pilight_version[strlen(PILIGHT_VERSION)+1];
 	char pilight_commit[3];
-	char *protocol_root = NULL;
-	int check1 = 0, check2 = 0, valid = 1, protocol_root_free = 0;
+	char *protocol_root = PROTOCOL_ROOT;
+	int check1 = 0, check2 = 0, valid = 1;
 	strcpy(pilight_version, PILIGHT_VERSION);
 
 	struct dirent *file = NULL;
@@ -113,15 +124,11 @@ void protocol_init(void) {
 
 	memset(pilight_commit, '\0', 3);
 
-	if(settings_find_string("protocol-root", &protocol_root) != 0) {
-		/* If no protocol root was set, use the default protocol root */
-		if((protocol_root = MALLOC(strlen(PROTOCOL_ROOT)+1)) == NULL) {
-			fprintf(stderr, "out of memory\n");
-			exit(EXIT_FAILURE);
-		}
-		strcpy(protocol_root, PROTOCOL_ROOT);
-		protocol_root_free = 1;
-	}
+	struct lua_state_t *state = plua_get_free_state();
+	int ret = config_setting_get_string(state->L, "actions-root", 0, &protocol_root);
+	assert(plua_check_stack(state->L, 0) == 0);
+	plua_clear_state(state);
+
 	size_t len = strlen(protocol_root);
 	if(protocol_root[len-1] != '/') {
 		strcat(protocol_root, "/");
@@ -185,7 +192,7 @@ void protocol_init(void) {
 		}
 		closedir(d);
 	}
-	if(protocol_root_free) {
+	if(ret == 0 || protocol_root != (void *)PROTOCOL_ROOT) {
 		FREE(protocol_root);
 	}
 #endif
@@ -208,7 +215,7 @@ void protocol_register(protocol_t **proto) {
 	(*proto)->maxgaplen = 0;
 	(*proto)->txrpt = 10;
 	(*proto)->rxrpt = 1;
-	(*proto)->hwtype = NONE;
+	(*proto)->hwtype = RFNONE;
 	(*proto)->multipleId = 1;
 	(*proto)->config = 1;
 	(*proto)->masterOnly = 0;

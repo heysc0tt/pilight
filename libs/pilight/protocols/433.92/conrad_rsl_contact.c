@@ -59,6 +59,11 @@ static void createMessage(int id, int state) {
 static void parseCode(void) {
 	int x = 0, binary[RAW_LENGTH/2];
 
+	if(conrad_rsl_contact->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "conrad_rsl_contact: parsecode - invalid parameter passed %d", conrad_rsl_contact->rawlen);
+		return;
+	}
+
 	/* Convert the one's and zero's into binary */
 	for(x=0; x<conrad_rsl_contact->rawlen; x+=2) {
 		if(conrad_rsl_contact->raw[x+1] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
@@ -93,9 +98,9 @@ void conradRSLContactInit(void) {
 	conrad_rsl_contact->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	conrad_rsl_contact->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&conrad_rsl_contact->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(([0-9]|([1-9][0-9])|([1-9][0-9]{2})|([1-9][0-9]{3})|([1-9][0-9]{4})|([1-9][0-9]{5})|([1-9][0-9]{6})|((6710886[0-3])|(671088[0-5][0-9])|(67108[0-7][0-9]{2})|(6710[0-7][0-9]{3})|(671[0--1][0-9]{4})|(670[0-9]{5})|(6[0-6][0-9]{6})|(0[0-5][0-9]{7}))))$");
-	options_add(&conrad_rsl_contact->options, 't', "opened", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&conrad_rsl_contact->options, 'f', "closed", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&conrad_rsl_contact->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(([0-9]|([1-9][0-9])|([1-9][0-9]{2})|([1-9][0-9]{3})|([1-9][0-9]{4})|([1-9][0-9]{5})|([1-9][0-9]{6})|((6710886[0-3])|(671088[0-5][0-9])|(67108[0-7][0-9]{2})|(6710[0-7][0-9]{3})|(671[0--1][0-9]{4})|(670[0-9]{5})|(6[0-6][0-9]{6})|(0[0-5][0-9]{7}))))$");
+	options_add(&conrad_rsl_contact->options, "t", "opened", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&conrad_rsl_contact->options, "f", "closed", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 
 	conrad_rsl_contact->parseCode=&parseCode;
 	conrad_rsl_contact->validate=&validate;
@@ -104,7 +109,7 @@ void conradRSLContactInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "conrad_rsl_contact";
-	module->version = "2.2";
+	module->version = "2.3";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

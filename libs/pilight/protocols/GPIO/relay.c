@@ -22,18 +22,24 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <math.h>
+#include <assert.h>
+#ifndef _WIN32
+#include <wiringx.h>
+#endif
 
 #include "../../core/pilight.h"
 #include "../../core/common.h"
 #include "../../core/dso.h"
 #include "../../core/log.h"
 #include "../../core/gc.h"
+#include "../../config/settings.h"
 #include "../protocol.h"
 #include "relay.h"
 
-#include "../../../wiringx/wiringX.h"
+#include "defines.h"
 
 static char *state = NULL;
+#if !defined(__FreeBSD__) && !defined(_WIN32)
 
 static void createMessage(int gpio, int state) {
 	relay->message = json_mkobject();
@@ -69,42 +75,65 @@ static int createCode(JsonNode *code) {
 	else if(json_find_number(code, "on", &itmp) == 0)
 		state=1;
 
+	char *platform = GPIO_PLATFORM;
+
 	if(gpio == -1 || state == -1) {
 		logprintf(LOG_ERR, "relay: insufficient number of arguments");
 		have_error = 1;
 		goto clear;
-	} else if(wiringXSupported() == 0) {
-		if(wiringXSetup() < 0) {
-			logprintf(LOG_ERR, "unable to setup wiringX") ;
-			return EXIT_FAILURE;
-		} else {
-			if(wiringXValidGPIO(gpio) != 0) {
-				logprintf(LOG_ERR, "relay: invalid gpio range");
-				have_error = 1;
-				goto clear;
-			} else {
-				if(strstr(progname, "daemon") != NULL) {
-					pinMode(gpio, OUTPUT);
-					if(strcmp(def, "off") == 0) {
-						if(state == 1) {
-							digitalWrite(gpio, LOW);
-						} else if(state == 0) {
-							digitalWrite(gpio, HIGH);
-						}
-					} else {
-						if(state == 0) {
-							digitalWrite(gpio, LOW);
-						} else if(state == 1) {
-							digitalWrite(gpio, HIGH);
-						}
-					}
-				} else {
-					wiringXGC();
-				}
-			createMessage(gpio, state);
+	}
+
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		if(config_setting_get_string(state->L, "gpio-platform", 0, &platform) != 0) {
+			logprintf(LOG_ERR, "no gpio-platform configured");
+			have_error = 1;
+			assert(lua_gettop(state->L) == 0);
+			plua_clear_state(state);
 			goto clear;
-			}
 		}
+		assert(lua_gettop(state->L) == 0);
+		plua_clear_state(state);
+	}
+
+	if(strcmp(platform, "none") == 0) {
+		FREE(platform);
+		logprintf(LOG_ERR, "no gpio-platform configured");
+		have_error = 1;
+		goto clear;
+	}
+	if(wiringXSetup(platform, logprintf1) < 0) {
+		FREE(platform);
+		have_error = 1;
+		goto clear;
+	}
+	FREE(platform);
+
+	if(wiringXValidGPIO(gpio) != 0) {
+		logprintf(LOG_ERR, "relay: invalid gpio range");
+		have_error = 1;
+		goto clear;
+	} else {
+		if(strstr(progname, "daemon") != NULL) {
+			pinMode(gpio, PINMODE_OUTPUT);
+			if(strcmp(def, "off") == 0) {
+				if(state == 1) {
+					digitalWrite(gpio, LOW);
+				} else if(state == 0) {
+					digitalWrite(gpio, HIGH);
+				}
+			} else {
+				if(state == 0) {
+					digitalWrite(gpio, LOW);
+				} else if(state == 1) {
+					digitalWrite(gpio, HIGH);
+				}
+			}
+		} else {
+			wiringXGC();
+		}
+		createMessage(gpio, state);
+		goto clear;
 	}
 
 clear:
@@ -150,26 +179,37 @@ static int checkValues(JsonNode *code) {
 	if((jid = json_find_member(code, "id")) != NULL) {
 		if((jchild = json_find_element(jid, 0)) != NULL) {
 			if(json_find_number(jchild, "gpio", &itmp) == 0) {
-				if(wiringXSupported() == 0) {
-					int gpio = (int)itmp;
-					int state = -1;
-					if(wiringXSetup() < 0) {
+				int gpio = (int)itmp;
+				int state1 = -1;
+				char *platform = GPIO_PLATFORM;
+
+				struct lua_state_t *state = plua_get_free_state();
+				if(config_setting_get_string(state->L, "gpio-platform", 0, &platform) != 0 || strcmp(platform, "none") == 0) {
+					logprintf(LOG_ERR, "relay: no gpio-platform configured");
+					assert(plua_check_stack(state->L, 0) == 0);
+					plua_clear_state(state);
+					return -1;
+				} else {
+					assert(plua_check_stack(state->L, 0) == 0);
+					plua_clear_state(state);
+
+					if(wiringXSetup(platform, logprintf1) < 0) {
 						logprintf(LOG_ERR, "unable to setup wiringX") ;
 						return -1;
 					} else if(wiringXValidGPIO(gpio) != 0) {
 						logprintf(LOG_ERR, "relay: invalid gpio range");
 						return -1;
 					} else {
-						pinMode(gpio, INPUT);
-						state = digitalRead(gpio);
+						pinMode(gpio, PINMODE_INPUT);
+						state1 = digitalRead(gpio);
 						if(strcmp(def, "on") == 0) {
-							state ^= 1;
+							state1 ^= 1;
 						}
 
 						relay->message = json_mkobject();
 						JsonNode *code = json_mkobject();
 						json_append_member(code, "gpio", json_mknumber(gpio, 0));
-						if(state == 1) {
+						if(state1 == 1) {
 							json_append_member(code, "state", json_mkstring("on"));
 						} else {
 							json_append_member(code, "state", json_mkstring("off"));
@@ -198,6 +238,7 @@ static int checkValues(JsonNode *code) {
 static void gc(void) {
 	FREE(state);
 }
+#endif
 
 #if !defined(MODULE) && !defined(_WIN32)
 __attribute__((weak))
@@ -211,28 +252,30 @@ void relayInit(void) {
 	relay->hwtype = HWRELAY;
 	relay->multipleId = 0;
 
-	options_add(&relay->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&relay->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&relay->options, 'g', "gpio", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "[0-9]");
+	options_add(&relay->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&relay->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&relay->options, "g", "gpio", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "[0-9]");
 
 	state = MALLOC(4);
 	strcpy(state, "off");
-	options_add(&relay->options, 0, "default-state", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_STRING, (void *)state, NULL);
-	options_add(&relay->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&relay->options, 0, "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&relay->options, "0", "default-state", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_STRING, (void *)state, NULL);
+	options_add(&relay->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&relay->options, "0", "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
+#if !defined(__FreeBSD__) && !defined(_WIN32)
 	relay->checkValues=&checkValues;
 	relay->createCode=&createCode;
 	relay->printHelp=&printHelp;
 	relay->gc=&gc;
+#endif
 }
 
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "relay";
-	module->version = "3.3";
-	module->reqversion = "6.0";
-	module->reqcommit = "84";
+	module->version = "3.4";
+	module->reqversion = "7.0";
+	module->reqcommit = "186";
 }
 
 void init(void) {

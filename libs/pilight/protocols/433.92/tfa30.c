@@ -64,7 +64,7 @@ static int validate(void) {
 }
 
 static void parseCode(void) {
-	int i = 0, x = 0, type = 0, id = 0, binary[RAW_LENGTH/2];
+	int i = 0, x = 0, type = 0, id = 0, binary[MAX_RAW_LENGTH/2];
 	double temp_offset = 0.0, humi_offset = 0.0;
 	double humidity = 0.0, temperature = 0.0;
 	int n0 = 0, n1 = 0, n2 = 0, n3 = 0, n3b = 0;
@@ -72,6 +72,11 @@ static void parseCode(void) {
 	int n9 = 0, n10 = 0;
 	int y = 0;
 	int checksum = 1;
+
+	if(tfa30->rawlen>MAX_RAW_LENGTH) {
+		logprintf(LOG_ERR, "tfa30: parsecode - invalid parameter passed %d", tfa30->rawlen);
+		return;
+	}
 
 	if(tfa30->rawlen == 80) {         // create first nibble for raw length 80
 		for(y=0;y<4;y+=1) {
@@ -99,6 +104,8 @@ static void parseCode(void) {
 	n2=binToDecRev(binary, 8, 11);
 	n1=binToDecRev(binary, 4, 7);
 	n0=binToDecRev(binary, 0, 3);
+
+	id = n3b;
 
 	struct settings_t *tmp = settings;
 	while(tmp) {
@@ -135,7 +142,6 @@ static void parseCode(void) {
 	tfa30->message = json_mkobject();
 	switch(type) {
 		case 1:
-			id = n3b;
 			temperature = (double)(n5-5)*10 + n6 + n7/10.0;
 			temperature += temp_offset;
 
@@ -143,7 +149,6 @@ static void parseCode(void) {
 			json_append_member(tfa30->message, "temperature", json_mknumber(temperature, 1));
 		break;
 		case 2:
-			id = n3b;
 			humidity = (double)(n5)*10 + n6;
 			humidity += humi_offset;
 
@@ -235,17 +240,17 @@ void tfa30Init(void) {
 	tfa30->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	tfa30->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&tfa30->options, 't', "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
-	options_add(&tfa30->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "[0-9]");
-	options_add(&tfa30->options, 'h', "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&tfa30->options, "t", "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
+	options_add(&tfa30->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "[0-9]");
+	options_add(&tfa30->options, "h", "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,3}$");
 
-	// options_add(&tfa30->options, 0, "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&tfa30->options, 0, "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&tfa30->options, 0, "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
-	options_add(&tfa30->options, 0, "humidity-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
-	options_add(&tfa30->options, 0, "temperature-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
-	options_add(&tfa30->options, 0, "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	options_add(&tfa30->options, 0, "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	// options_add(&tfa30->options, "0", "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&tfa30->options, "0", "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&tfa30->options, "0", "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "[0-9]");
+	options_add(&tfa30->options, "0", "humidity-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
+	options_add(&tfa30->options, "0", "temperature-offset", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)0, "[0-9]");
+	options_add(&tfa30->options, "0", "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	options_add(&tfa30->options, "0", "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
 
 
 	tfa30->parseCode=&parseCode;
@@ -257,7 +262,7 @@ void tfa30Init(void) {
 #ifdef MODULAR
 void compatibility(const char **version, const char **commit) {
 	module->name = "tfa30";
-	module->version = "1.0";
+	module->version = "1.1";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

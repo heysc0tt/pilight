@@ -1,19 +1,9 @@
 /*
-	Copyright (C) 2013 - 2014 CurlyMo
+  Copyright (C) CurlyMo
 
-	This file is part of pilight.
-
-	pilight is free software: you can redistribute it and/or modify it under the
-	terms of the GNU General Public License as published by the Free Software
-	Foundation, either version 3 of the License, or (at your option) any later
-	version.
-
-	pilight is distributed in the hope that it will be useful, but WITHOUT ANY
-	WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with pilight. If not, see	<http://www.gnu.org/licenses/>
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
 #include <stdio.h>
@@ -82,78 +72,61 @@ int main(int argc, char **argv) {
 
 	char *server = NULL;
 	char *filter = NULL;
-	unsigned short port = 0;
-	unsigned short stats = 0;
-	unsigned short filteropt = 0;
+	int port = 0;
+	int stats = 0;
+	int filteropt = 0;
+	int help = 0;
 
-	char *args = NULL;
+	options_add(&options, "H", "help", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "V", "version", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "S", "server", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$");
+	options_add(&options, "P", "port", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "[0-9]{1,4}");
+	options_add(&options, "s", "stats", OPTION_NO_VALUE, 0, JSON_NULL, NULL, "[0-9]{1,4}");
+	options_add(&options, "F", "filter", OPTION_HAS_VALUE, 0, JSON_STRING, NULL, NULL);
 
-	options_add(&options, 'H', "help", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'V', "version", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'S', "server", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$");
-	options_add(&options, 'P', "port", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "[0-9]{1,4}");
-	options_add(&options, 's', "stats", OPTION_NO_VALUE, 0, JSON_NULL, NULL, "[0-9]{1,4}");
-	options_add(&options, 'F', "filter", OPTION_HAS_VALUE, 0, JSON_STRING, NULL, NULL);
-
-	/* Store all CLI arguments for later usage
-	   and also check if the CLI arguments where
-	   used correctly by the user. This will also
-	   fill all necessary values in the options struct */
-	while(1) {
-		int c;
-		c = options_parse(&options, argc, argv, 1, &args);
-		if(c == -1)
-			break;
-		if(c == -2)
-			c = 'H';
-		switch(c) {
-			case 'H':
-				printf("\t -H --help\t\t\tdisplay this message\n");
-				printf("\t -V --version\t\t\tdisplay version\n");
-				printf("\t -S --server=x.x.x.x\t\tconnect to server address\n");
-				printf("\t -P --port=xxxx\t\t\tconnect to server port\n");
-				printf("\t -s --stats\t\t\tshow CPU and RAM statistics\n");
-				printf("\t -F --filter=protocol\t\tfilter out protocol(s)\n");
-				exit(EXIT_SUCCESS);
-			break;
-			case 'V':
-				printf("%s v%s\n", progname, PILIGHT_VERSION);
-				exit(EXIT_SUCCESS);
-			break;
-			case 'S':
-				if((server = MALLOC(strlen(args)+1)) == NULL) {
-					fprintf(stderr, "out of memory\n");
-					exit(EXIT_FAILURE);
-				}
-				strcpy(server, args);
-			break;
-			case 'P':
-				port = (unsigned short)atoi(args);
-			break;
-			case 's':
-				stats = 1;
-			break;
-			case 'F':
-				if((filter = REALLOC(filter, strlen(args)+1)) == NULL) {
-					fprintf(stderr, "out of memory\n");
-					exit(EXIT_FAILURE);
-				}
-				strcpy(filter, args);
-				filteropt = 1;
-			break;
-			default:
-				printf("Usage: %s \n", progname);
-				exit(EXIT_SUCCESS);
-			break;
-		}
+	if(options_parse(options, argc, argv, 1) == -1) {
+		printf("Usage: %s \n", progname);
+		goto close;
 	}
-	options_delete(options);
+
+	if(options_exists(options, "H") == 0 || help == 1) {
+		printf("\t -H --help\t\t\tdisplay this message\n");
+		printf("\t -V --version\t\t\tdisplay version\n");
+		printf("\t -S --server=x.x.x.x\t\tconnect to server address\n");
+		printf("\t -P --port=xxxx\t\t\tconnect to server port\n");
+		printf("\t -s --stats\t\t\tshow CPU and RAM statistics\n");
+		printf("\t -F --filter=protocol\t\tfilter out protocol(s)\n");
+		goto close;
+	}
+
+	if(options_exists(options, "V") == 0) {
+		printf("%s v%s\n", progname, PILIGHT_VERSION);
+		goto close;
+	}
+
+	if(options_exists(options, "S") == 0) {
+		options_get_string(options, "S", &server);
+	}
+
+	if(options_exists(options, "P") == 0) {
+		options_get_number(options, "P", &port);
+	}
+
+	if(options_exists(options, "s") == 0) {
+		stats = 1;
+	}
+
+	if(options_exists(options, "F") == 0) {
+		options_get_string(options, "F", &filter);
+		filteropt = 1;
+	}
 
 	if(filteropt == 1) {
 		struct protocol_t *protocol = NULL;
 		m = explode(filter, ",", &filters);
 		int match = 0, j = 0;
-		
+
+		plua_init();
 		protocol_init();
 
 		for(j=0;j<m;j++) {
@@ -193,9 +166,12 @@ int main(int argc, char **argv) {
 	if(ssdp_list != NULL) {
 		ssdp_free(ssdp_list);
 	}
-	if(server != NULL) {
-		FREE(server);
-	}
+	/*
+	 * Already freed with the options struct
+	 */
+	// if(server != NULL) {
+		// FREE(server);
+	// }
 
 	struct JsonNode *jclient = json_mkobject();
 	struct JsonNode *joptions = json_mkobject();
@@ -260,11 +236,10 @@ close:
 		FREE(recvBuff);
 		recvBuff = NULL;
 	}
-	if(filter != NULL) {
-		FREE(filter);
-		filter = NULL;	
-	}
+	options_delete(options);
 	array_free(&filters, m);
+
+	plua_gc();
 	protocol_gc();
 	options_gc();
 	log_shell_disable();

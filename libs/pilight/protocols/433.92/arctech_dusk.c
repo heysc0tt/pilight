@@ -57,14 +57,19 @@ static void createMessage(int id, int unit, int state, int all) {
 	}
 
 	if(state == 1) {
-		json_append_member(arctech_dusk->message, "state", json_mkstring("dawn"));
-	} else {
 		json_append_member(arctech_dusk->message, "state", json_mkstring("dusk"));
+	} else {
+		json_append_member(arctech_dusk->message, "state", json_mkstring("dawn"));
 	}
 }
 
 static void parseCode(void) {
 	int binary[RAW_LENGTH/4], x = 0, i = 0;
+
+	if(arctech_dusk->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "arctech_dusk: parsecode - invalid parameter passed %d", arctech_dusk->rawlen);
+		return;
+	}
 
 	for(x=0;x<arctech_dusk->rawlen;x+=4) {
 		if(arctech_dusk->raw[x+3] > AVG_PULSE_LENGTH*PULSE_MULTIPLIER) {
@@ -97,10 +102,10 @@ void arctechDuskInit(void) {
 	arctech_dusk->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	arctech_dusk->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&arctech_dusk->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1}|[1][0-5])$");
-	options_add(&arctech_dusk->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,7}|[1-5][0-9]{7}|6([0-6][0-9]{6}|7(0[0-9]{5}|10([0-7][0-9]{3}|8([0-7][0-9]{2}|8([0-5][0-9]|6[0-3]))))))$");
-	options_add(&arctech_dusk->options, 't', "dusk", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&arctech_dusk->options, 'f', "dawn", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&arctech_dusk->options, "u", "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1}|[1][0-5])$");
+	options_add(&arctech_dusk->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,7}|[1-5][0-9]{7}|6([0-6][0-9]{6}|7(0[0-9]{5}|10([0-7][0-9]{3}|8([0-7][0-9]{2}|8([0-5][0-9]|6[0-3]))))))$");
+	options_add(&arctech_dusk->options, "t", "dusk", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&arctech_dusk->options, "f", "dawn", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 
 	arctech_dusk->parseCode=&parseCode;
 	arctech_dusk->validate=&validate;
@@ -109,7 +114,7 @@ void arctechDuskInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "arctech_dusk";
-	module->version = "2.1";
+	module->version = "2.2";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

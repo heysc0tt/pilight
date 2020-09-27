@@ -61,6 +61,11 @@ static void createMessage(int systemcode, int unitcode, int state) {
 static void parseCode(void) {
 	int binary[RAW_LENGTH/4], x = 0, i = 0;
 
+	if(sc2262->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "sc2262: parsecode - invalid parameter passed %d", sc2262->rawlen);
+		return;
+	}
+
 	for(x=0;x<sc2262->rawlen-2;x+=4) {
 		if(sc2262->raw[x+3] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
 			binary[i++] = 1;
@@ -90,10 +95,10 @@ void sc2262Init(void) {
 	sc2262->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	sc2262->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&sc2262->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&sc2262->options, 'u', "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&sc2262->options, 't', "opened", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&sc2262->options, 'f', "closed", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&sc2262->options, "s", "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&sc2262->options, "u", "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&sc2262->options, "t", "opened", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&sc2262->options, "f", "closed", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 
 	sc2262->parseCode=&parseCode;
 	sc2262->validate=&validate;
@@ -102,7 +107,7 @@ void sc2262Init(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "sc2262";
-	module->version = "2.3";
+	module->version = "2.4";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

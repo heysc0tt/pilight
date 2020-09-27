@@ -40,7 +40,7 @@
 }
 
 .ui-li-static {
-	height: 27px;
+	min-height: 27px;
 	padding: 5px 0px 5px 0px;
 }
 
@@ -130,7 +130,7 @@ div.ui-slider-switch, div.screen {
 }
 
 li.label .text {
-	position: absolute;
+	position: relative;
 	right: 0px;
 	margin: 2px 5px 0px 5px;
 	color: black;
@@ -143,10 +143,10 @@ li.label .marquee {
 	overflow: hidden;
 	font-weight: normal;
 	text-align: right;
-	width: 50%;
+	max-width: 95%;
 	padding: 4px 5px 0px 5px;
-	white-space: nowrap;
-	height: 25px;
+	white-space: normal;
+	min-height: 25px;
 	-moz-border-radius: 4px 4px 4px 4px;
 	border-radius: 4px 4px 4px 4px;
 }
@@ -167,10 +167,10 @@ div.name {
 	float: left;
 }
 
-div.humidity, div.temperature, div.pressure,
+div.humidity, div.temperature, div.pressure, div.illuminance,
 div.rain, div.windavg, div.windgust, div.winddir,
 div.temperature_icon, div.humidity_icon, div.pressure_icon,
-div.rain_icon, div.windavg_icon,
+div.rain_icon, div.windavg_icon, div.illuminance_icon,
 div.windgust_icon, div.winddir_icon,
 div.update_active, div.update_inactive,
 div.sunrise, div.sunset, div.sunset_icon.gray,
@@ -196,7 +196,7 @@ div.sunset_icon.blue, div.sunrise_icon.yellow  {
 }
 
 div.temperature_icon, div.humidity_icon, div.pressure_icon,
-div.rain_icon, div.windavg_icon,
+div.rain_icon, div.windavg_icon, div.illuminance_icon,
 div.windgust_icon {
 	width: 16px;
 	height: 16px;
@@ -297,6 +297,10 @@ div.windgust_icon {
 	background: url('windgust.png') 0px 0px no-repeat;
 }
 
+div.illuminance_icon {
+	background: url('illuminance.png') 0px 0px no-repeat;
+}
+
 div.update_active {
 	background: url('update_active.png') 0px 0px no-repeat;
 }
@@ -343,4 +347,19 @@ div.media_icon.episode {
 
 div.media_icon.song {
 	background: url('song.png') 0px 0px no-repeat;
+}
+
+ul.ui-listview li.switch div.name {
+        padding-right: 95px;
+        white-space: normal;
+}
+
+.weather_values {
+	overflow: auto;
+	float: right;
+}
+
+.ui-li-static {
+        height: auto;
+        min-height: 27px;
 }

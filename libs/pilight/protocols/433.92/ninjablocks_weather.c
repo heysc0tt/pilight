@@ -36,13 +36,13 @@
 #define AVG_PULSE_LENGTH	2120
 #define MIN_RAW_LENGTH		41
 #define MAX_RAW_LENGTH		70
-#define RAW_LENGTH				50
+#define RAW_LENGTH			50
 
-#define	PULSE_NINJA_WEATHER_SHORT		1000
+#define PULSE_NINJA_WEATHER_SHORT	1000
 #define PULSE_NINJA_WEATHER_LONG		2000
 #define PULSE_NINJA_WEATHER_FOOTER	AVG_PULSE_LENGTH	// 72080/PULSE_DIV
-#define PULSE_NINJA_WEATHER_LOWER		750		// SHORT*0,75
-#define PULSE_NINJA_WEATHER_UPPER		1250	// SHORT * 1,25
+#define PULSE_NINJA_WEATHER_LOWER	750	// SHORT*0,75
+#define PULSE_NINJA_WEATHER_UPPER	1250	// SHORT * 1,25
 
 typedef struct settings_t {
 	double id;
@@ -74,15 +74,20 @@ static void createMessage(int id, int unit, double temperature, double humidity)
 }
 
 static void parseCode(void) {
-	int x = 0, pRaw = 0, binary[RAW_LENGTH/2];
+	int x = 0, pRaw = 0, binary[MAX_RAW_LENGTH/2];
 	int iParity = 1, iParityData = -1;	// init for even parity
 	int iHeaderSync = 12;				// 1100
 	int iDataSync = 6;					// 110
 	double temp_offset = 0.0;
 	double humi_offset = 0.0;
 
+	if(ninjablocks_weather->rawlen>MAX_RAW_LENGTH) {
+		logprintf(LOG_ERR, "ninjablocks_weather: parsecode - invalid parameter passed %d", ninjablocks_weather->rawlen);
+		return;
+	}
+
 	// Decode Biphase Mark Coded Differential Manchester (BMCDM) pulse stream into binary
-	for(x=0; x<=(RAW_LENGTH/2); x++) {
+	for(x=0; x<=(MAX_RAW_LENGTH/2); x++) {
 		if(ninjablocks_weather->raw[pRaw] > PULSE_NINJA_WEATHER_LOWER &&
 		  ninjablocks_weather->raw[pRaw] < PULSE_NINJA_WEATHER_UPPER) {
 			binary[x] = 1;
@@ -208,17 +213,17 @@ void ninjablocksWeatherInit(void) {
 	ninjablocks_weather->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 
 	// sync-id[4]; Homecode[4], Channel Code[2], Sync[3], Humidity[7], Temperature[15], Footer [1]
-	options_add(&ninjablocks_weather->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]|1[0-5])$");
-	options_add(&ninjablocks_weather->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-3])$");
-	options_add(&ninjablocks_weather->options, 't', "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,5}$");
-	options_add(&ninjablocks_weather->options, 'h', "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,5}$");
+	options_add(&ninjablocks_weather->options, "u", "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]|1[0-5])$");
+	options_add(&ninjablocks_weather->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-3])$");
+	options_add(&ninjablocks_weather->options, "t", "temperature", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,5}$");
+	options_add(&ninjablocks_weather->options, "h", "humidity", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, "^[0-9]{1,5}$");
 
-	// options_add(&ninjablocks_weather->options, 0, "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)2, "[0-9]");
-	options_add(&ninjablocks_weather->options, 0, "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)2, "[0-9]");
-	options_add(&ninjablocks_weather->options, 0, "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)2, "[0-9]");
-	options_add(&ninjablocks_weather->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&ninjablocks_weather->options, 0, "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
-	options_add(&ninjablocks_weather->options, 0, "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	// options_add(&ninjablocks_weather->options, "0", "decimals", OPTION_HAS_VALUE, DEVICES_SETTING, JSON_NUMBER, (void *)2, "[0-9]");
+	options_add(&ninjablocks_weather->options, "0", "temperature-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)2, "[0-9]");
+	options_add(&ninjablocks_weather->options, "0", "humidity-decimals", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)2, "[0-9]");
+	options_add(&ninjablocks_weather->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&ninjablocks_weather->options, "0", "show-humidity", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
+	options_add(&ninjablocks_weather->options, "0", "show-temperature", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)1, "^[10]{1}$");
 
 	ninjablocks_weather->parseCode=&parseCode;
 	ninjablocks_weather->checkValues=&checkValues;
@@ -229,8 +234,8 @@ void ninjablocksWeatherInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "ninjablocks_weather";
-	module->version = "1.0";
-	module->reqversion = "6.0";
+	module->version = "1.2";
+	module->reqversion = "7.0";
 	module->reqcommit = "84";
 }
 

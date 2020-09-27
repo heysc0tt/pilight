@@ -1,19 +1,9 @@
 /*
-	Copyright (C) 2013 - 2014 CurlyMo
+  Copyright (C) CurlyMo
 
-	This file is part of pilight.
-
-	pilight is free software: you can redistribute it and/or modify it under the
-	terms of the GNU General Public License as published by the Free Software
-	Foundation, either version 3 of the License, or (at your option) any later
-	version.
-
-	pilight is distributed in the hope that it will be useful, but WITHOUT ANY
-	WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with pilight. If not, see	<http://www.gnu.org/licenses/>
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
 #include <stdio.h>
@@ -26,32 +16,37 @@
 #include <time.h>
 #include <math.h>
 #include <string.h>
+#ifndef _WIN32
+#include <wiringx.h>
+#endif
+#include <assert.h>
 
 #include "libs/pilight/core/threads.h"
 #include "libs/pilight/core/pilight.h"
 #include "libs/pilight/core/network.h"
-#include "libs/pilight/core/config.h"
+#include "libs/pilight/core/options.h"
 #include "libs/pilight/core/log.h"
 #include "libs/pilight/core/datetime.h"
 #include "libs/pilight/core/ssdp.h"
 #include "libs/pilight/core/socket.h"
 #include "libs/pilight/core/threads.h"
-#include "libs/pilight/core/irq.h"
 #include "libs/pilight/core/dso.h"
 #include "libs/pilight/core/gc.h"
+#include "libs/pilight/config/config.h"
+#include "libs/pilight/config/hardware.h"
+#include "libs/pilight/lua_c/lua.h"
+#include "libs/pilight/lua_c/table.h"
 
 #include "libs/pilight/protocols/protocol.h"
 
 #include "libs/pilight/events/events.h"
 
-#include "libs/pilight/config/hardware.h"
-
-#ifndef _WIN32
-	#include "libs/wiringx/wiringX.h"
-#endif
+static uv_signal_t *signal_req = NULL;
 
 static unsigned short main_loop = 1;
 static unsigned short linefeed = 0;
+
+static char *lua_root = LUA_ROOT;
 
 int main_gc(void) {
 	log_shell_disable();
@@ -65,11 +60,14 @@ int main_gc(void) {
 	options_gc();
 	socket_gc();
 
+	eventpool_gc();
+	config_write(1, "all");
 	config_gc();
 	protocol_gc();
 	whitelist_free();
 	threads_gc();
 
+	plua_gc();
 #ifndef _WIN32
 	wiringXGC();
 #endif
@@ -87,65 +85,87 @@ int main_gc(void) {
 	return EXIT_SUCCESS;
 }
 
-void *receiveOOK(void *param) {
-	int duration = 0, iLoop = 0;
+static int iter = 0;
 
-	struct hardware_t *hw = (hardware_t *)param;
-	while(main_loop && hw->receiveOOK) {
-		duration = hw->receiveOOK();
-		iLoop++;
-		if(duration > 0) {
+static void *listener(int reason, void *param, void *userdata) {
+	struct plua_metatable_t *table = param;
+	char nr[255], *p = nr;
+	char *hardware = NULL;
+	double length = 0.0;
+	double pulse = 0.0;
+	int buffer[WIRINGX_BUFFER];
+	memset(&buffer, 0, WIRINGX_BUFFER*sizeof(int));
+
+	memset(&nr, 0, 255);
+
+	int i = 0;
+	plua_metatable_get_number(table, "length", &length);
+	plua_metatable_get_string(table, "hardware", &hardware);
+
+	for(i=0;i<length;i++) {
+		snprintf(p, 254, "pulses.%d", i+1);
+		plua_metatable_get_number(table, nr, &pulse);
+		buffer[i] = (int)pulse;
+	}
+
+	if((int)length > 0) {
+		for(i=0;i<(int)length;i++) {
 			if(linefeed == 1) {
-				if(duration > 5100) {
-					printf(" %d -#: %d\n%s: ",duration, iLoop, hw->id);
-					iLoop = 0;
-				} else {
-					printf(" %d", duration);
+				printf(" %d", buffer[i]);
+				iter++;
+				if(buffer[i] > 5100) {
+					printf(" -# %d\n %s:", iter, hardware);
+					iter = 0;
 				}
 			} else {
-				printf("%s: %d\n", hw->id, duration);
+				printf("%s: %d\n", hardware, buffer[i]);
 			}
 		}
-	};
+	}
 	return NULL;
 }
 
-void *receivePulseTrain(void *param) {
-	struct rawcode_t r;
-	int i = 0;
+static void signal_cb(uv_signal_t *handle, int signum) {
+	uv_stop(uv_default_loop());
+	main_gc();
+}
 
-	struct hardware_t *hw = (hardware_t *)param;
-	while(main_loop && hw->receivePulseTrain) {
-		hw->receivePulseTrain(&r);
-		if(r.length == -1) {
-			main_gc();
-			break;
-		} else if(r.length > 0) {
-			for(i=0;i<r.length;i++) {
-				if(linefeed == 1) {
-					printf(" %d", r.pulses[i]);
-					if(r.pulses[i] > 5100) {
-						printf(" -# %d\n %s:", i, hw->id);
-					}
-				} else {
-					printf("%s: %d\n", hw->id, r.pulses[i]);
-				}
-			}
+static void close_cb(uv_handle_t *handle) {
+	FREE(handle);
+}
+
+static void walk_cb(uv_handle_t *handle, void *arg) {
+	if(!uv_is_closing(handle)) {
+		uv_close(handle, close_cb);
+	}
+}
+
+static void main_loop1(int onclose) {
+	if(onclose == 1) {
+		signal_cb(NULL, SIGINT);
+	}
+	uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+	uv_walk(uv_default_loop(), walk_cb, NULL);
+	uv_run(uv_default_loop(), UV_RUN_ONCE);
+
+	if(onclose == 1) {
+		while(uv_loop_close(uv_default_loop()) == UV_EBUSY) {
+			usleep(10);
 		}
-	};
-	return NULL;
+	}
 }
 
 int main(int argc, char **argv) {
+	const uv_thread_t pth_cur_id = uv_thread_self();
+	memcpy((void *)&pth_main_id, &pth_cur_id, sizeof(uv_thread_t));
+
 	// memtrack();
 
 	atomicinit();
 	struct options_t *options = NULL;
 	char *args = NULL;
-	char *configtmp = MALLOC(strlen(CONFIG_FILE)+1);
-	pid_t pid = 0;
-
-	strcpy(configtmp, CONFIG_FILE);
+	char *configtmp = CONFIG_FILE;
+	int help = 0;
 
 	gc_attach(main_gc);
 
@@ -157,6 +177,13 @@ int main(int argc, char **argv) {
 		exit(EXIT_FAILURE);
 	}
 	strcpy(progname, "pilight-raw");
+
+	if((signal_req = MALLOC(sizeof(uv_signal_t))) == NULL) {
+		OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+	}
+
+	uv_signal_init(uv_default_loop(), signal_req);
+	uv_signal_start(signal_req, signal_cb, SIGINT);
 
 #ifndef _WIN32
 	if(geteuid() != 0) {
@@ -170,109 +197,161 @@ int main(int argc, char **argv) {
 	log_file_disable();
 	log_level_set(LOG_NOTICE);
 
-#ifndef _WIN32
-	wiringXLog = logprintf;
-#endif
+	options_add(&options, "H", "help", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "V", "version", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "C", "config", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "L", "linefeed", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "Ls", "storage-root", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "Ll", "lua-root", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
 
-	options_add(&options, 'H', "help", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'V', "version", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'C', "config", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'L', "linefeed", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	if(options_parse(options, argc, argv, 1) == -1) {
+		help = 1;
+	}
 
-	while (1) {
-		int c;
-		c = options_parse(&options, argc, argv, 1, &args);
-		if(c == -1)
-			break;
-		if(c == -2)
-			c = 'H';
-		switch (c) {
-			case 'H':
-				printf("Usage: %s [options]\n", progname);
-				printf("\t -H --help\t\tdisplay usage summary\n");
-				printf("\t -V --version\t\tdisplay version\n");
- 				printf("\t -L --linefeed\t\tstructure raw printout\n");
- 				printf("\t -C --config\t\tconfig file\n");
-				goto close;
-			break;
-			case 'L':
-				linefeed = 1;
-			break;
-			case 'V':
-				printf("%s v%s\n", progname, PILIGHT_VERSION);
-				goto close;
-			break;
-			case 'C':
-				configtmp = REALLOC(configtmp, strlen(args)+1);
-				strcpy(configtmp, args);
-			break;
-			default:
-				printf("Usage: %s [options]\n", progname);
-				goto close;
-			break;
+	if(options_exists(options, "H") == 0 || help == 1) {
+		printf("Usage: %s [options]\n", progname);
+		printf("\t -H  --help\t\t\tdisplay usage summary\n");
+		printf("\t -V  --version\t\t\tdisplay version\n");
+		printf("\t -L  --linefeed\t\t\tstructure raw printout\n");
+		printf("\t -C  --config\t\t\tconfig file\n");
+		printf("\t -Ls --storage-root=xxxx\tlocation of the storage lua modules\n");
+		printf("\t -Ll --lua-root=xxxx\t\tlocation of the plain lua modules\n");
+		goto close;
+	}
+
+	if(options_exists(options, "L") == 0) {
+		linefeed = 1;
+	}
+
+	if(options_exists(options, "V") == 0) {
+		printf("%s v%s\n", progname, PILIGHT_VERSION);
+		goto close;
+	}
+
+	if(options_exists(options, "C") == 0) {
+		options_get_string(options, "C", &configtmp);
+	}
+
+	if(options_exists(options, "Ls") == 0) {
+		char *arg = NULL;
+		options_get_string(options, "Ls", &arg);
+		if(config_root(arg) == -1) {
+			logprintf(LOG_ERR, "%s is not valid storage lua modules path", arg);
+			goto close;
 		}
 	}
-	options_delete(options);
 
-#ifdef _WIN32
-	if((pid = check_instances(L"pilight-raw")) != -1) {
-		logprintf(LOG_NOTICE, "pilight-raw is already running");
-		goto close;
-	}
-#endif
-
-	if((pid = isrunning("pilight-daemon")) != -1) {
-		logprintf(LOG_NOTICE, "pilight-daemon instance found (%d)", (int)pid);
-		goto close;
+	if(options_exists(options, "Ll") == 0) {
+		options_get_string(options, "Ll", &lua_root);
 	}
 
-	if((pid = isrunning("pilight-debug")) != -1) {
-		logprintf(LOG_NOTICE, "pilight-debug instance found (%d)", (int)pid);
+	{
+		int len = strlen(lua_root)+strlen("lua/?/?.lua")+1;
+		char *lua_path = MALLOC(len);
+
+		if(lua_path == NULL) {
+			OUT_OF_MEMORY
+		}
+
+		plua_init();
+
+		memset(lua_path, '\0', len);
+		snprintf(lua_path, len, "%s/?/?.lua", lua_root);
+		plua_package_path(lua_path);
+
+		memset(lua_path, '\0', len);
+		snprintf(lua_path, len, "%s/?.lua", lua_root);
+		plua_package_path(lua_path);
+
+		FREE(lua_path);
+	}
+
+	int *ret = NULL, n = 0;
+	if((n = isrunning("pilight-raw", &ret)) > 1) {
+		int i = 0;
+		for(i=0;i<n;i++) {
+			if(ret[i] != getpid()) {
+				logprintf(LOG_NOTICE, "pilight-raw is already running (%d)", ret[i]);
+				break;
+			}
+		}
+		FREE(ret);
 		goto close;
+	}
+	if(ret != NULL) {
+		FREE(ret);
+	}
+
+	if((n = isrunning("pilight-daemon", &ret)) > 0) {
+		logprintf(LOG_NOTICE, "pilight-daemon instance found (%d)", ret[0]);
+		FREE(ret);
+		goto close;
+	}
+	if(ret != NULL) {
+		FREE(ret);
+	}
+
+	if((n = isrunning("pilight-debug", &ret)) > 0) {
+		logprintf(LOG_NOTICE, "pilight-debug instance found (%d)", ret[0]);
+		FREE(ret);
+		goto close;
+	}
+	if(ret != NULL) {
+		FREE(ret);
 	}
 
 	if(config_set_file(configtmp) == EXIT_FAILURE) {
-		FREE(configtmp);
-		return EXIT_FAILURE;
-	}
-
-	protocol_init();
-	config_init();
-	if(config_read() != EXIT_SUCCESS) {
-		FREE(configtmp);
 		goto close;
 	}
-	FREE(configtmp);
 
-	/* Start threads library that keeps track of all threads used */
-	threads_start();
+	eventpool_init(EVENTPOOL_THREADED);
+	eventpool_callback(REASON_RECEIVED_PULSETRAIN+10000, listener, NULL);
+	eventpool_callback(REASON_RECEIVED_OOK+10000, listener, NULL);
 
-	struct conf_hardware_t *tmp_confhw = conf_hardware;
-	while(tmp_confhw) {
-		if(tmp_confhw->hardware->init) {
-			if(tmp_confhw->hardware->init() == EXIT_FAILURE) {
-				logprintf(LOG_ERR, "could not initialize %s hardware mode", tmp_confhw->hardware->id);
-				goto close;
-			}
-			if(tmp_confhw->hardware->comtype == COMOOK) {
-				threads_register(tmp_confhw->hardware->id, &receiveOOK, (void *)tmp_confhw->hardware, 0);
-			} else if(tmp_confhw->hardware->comtype == COMPLSTRAIN) {
-				threads_register(tmp_confhw->hardware->id, &receivePulseTrain, (void *)tmp_confhw->hardware, 0);
-			}
-		}
-		tmp_confhw = tmp_confhw->next;
+	plua_init();
+	protocol_init();
+	hardware_init();
+	config_init();
+
+	struct lua_state_t *state = plua_get_free_state();
+	if(config_read(state->L, CONFIG_SETTINGS | CONFIG_HARDWARE) != EXIT_SUCCESS) {
+		assert(plua_check_stack(state->L, 0) == 0);
+		plua_clear_state(state);
+		goto close;
+	}
+	assert(plua_check_stack(state->L, 0) == 0);
+	plua_clear_state(state);
+
+	struct plua_metatable_t *table = config_get_metatable();
+	plua_metatable_set_number(table, "registry.hardware.RF433.mingaplen", 0);
+	plua_metatable_set_number(table, "registry.hardware.RF433.maxgaplen", 99999);
+	plua_metatable_set_number(table, "registry.hardware.RF433.minrawlen", 0);
+	plua_metatable_set_number(table, "registry.hardware.RF433.maxrawlen", WIRINGX_BUFFER);
+
+	if(config_hardware_run() == -1) {
+		logprintf(LOG_NOTICE, "there are no hardware modules configured");
+		uv_stop(uv_default_loop());
 	}
 
-	while(main_loop) {
-		sleep(1);
-	}
+	main_loop1(0);
 
-close:
+	options_delete(options);
 	if(args != NULL) {
 		FREE(args);
 	}
-	if(main_loop == 1) {
-		main_gc();
+	main_gc();
+	return EXIT_SUCCESS;
+
+close:
+	options_delete(options);
+	if(args != NULL) {
+		FREE(args);
 	}
+
+	plua_gc();
+	protocol_gc();
+	main_loop1(1);
+	main_gc();
+
 	return (EXIT_FAILURE);
 }

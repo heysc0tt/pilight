@@ -61,11 +61,35 @@ static void parseCode(void) {
 	int binary[RAW_LENGTH/4], x = 0, i = 0;
 	int len = (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2));
 
-	for(x=0;x<arctech_switch_old->rawlen-2;x+=4) {
+	if(arctech_switch_old->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "arctech_switch_old: parsecode - invalid parameter passed %d", arctech_switch_old->rawlen);
+		return;
+	}
+
+	for(x=0;x<arctech_switch_old->rawlen-3;x+=4) {
+		// valid telegrams must consist of 0110 and 1001 blocks
+		int low_high = 0;
+		if(arctech_switch_old->raw[x] > len) {
+			low_high |= 1;
+		}
+		if(arctech_switch_old->raw[x+1] > len) {
+			low_high |= 2;
+		}
+		if(arctech_switch_old->raw[x+2] > len) {
+			low_high |= 4;
+		}
 		if(arctech_switch_old->raw[x+3] > len) {
-			binary[i++] = 0;
-		} else {
-			binary[i++] = 1;
+			low_high |= 8;
+		}
+		switch(low_high) {
+			case 6:
+				binary[i++] = 1;
+			break;
+			case 10:
+				binary[i++] = 0;
+			break;
+			default:
+				return; // invalid telegram
 		}
 	}
 
@@ -196,7 +220,6 @@ void arctechSwitchOldInit(void) {
 	protocol_device_add(arctech_switch_old, "intertechno_old", "Old Intertechno Switches");
 	protocol_device_add(arctech_switch_old, "byebyestandby", "Bye Bye Standby Switches");
 	protocol_device_add(arctech_switch_old, "duwi", "Düwi Terminal Switches");
-	protocol_device_add(arctech_switch_old, "eurodomest", "Eurodomest Switches");
 	arctech_switch_old->devtype = SWITCH;
 	arctech_switch_old->hwtype = RF433;
 	arctech_switch_old->minrawlen = RAW_LENGTH;
@@ -204,13 +227,13 @@ void arctechSwitchOldInit(void) {
 	arctech_switch_old->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	arctech_switch_old->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&arctech_switch_old->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&arctech_switch_old->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&arctech_switch_old->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1}|[1][0-5])$");
-	options_add(&arctech_switch_old->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&arctech_switch_old->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&arctech_switch_old->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&arctech_switch_old->options, "u", "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1}|[1][0-5])$");
+	options_add(&arctech_switch_old->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
 
-	options_add(&arctech_switch_old->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&arctech_switch_old->options, 0, "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&arctech_switch_old->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&arctech_switch_old->options, "0", "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	arctech_switch_old->parseCode=&parseCode;
 	arctech_switch_old->createCode=&createCode;
@@ -221,7 +244,7 @@ void arctechSwitchOldInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "arctech_switch_old";
-	module->version = "2.4";
+	module->version = "2.5";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

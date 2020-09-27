@@ -28,12 +28,15 @@
 
 #include "../core/common.h"
 #include "../core/json.h"
-#include "../core/config.h"
 #include "../core/log.h"
+#include "../config/config.h"
 #include "devices.h"
 #include "gui.h"
 
 struct config_t *config_gui;
+
+static pthread_mutex_t mutex_lock;
+static pthread_mutexattr_t mutex_attr;
 
 static struct gui_elements_t *gui_elements = NULL;
 
@@ -68,6 +71,7 @@ int gui_gc(void) {
 	struct gui_settings_t *stmp;
 	struct gui_values_t *vtmp;
 
+	pthread_mutex_lock(&mutex_lock);
 	/* Free devices structure */
 	while(gui_elements) {
 		dtmp = gui_elements;
@@ -103,13 +107,15 @@ int gui_gc(void) {
 	if(gui_elements != NULL) {
 		FREE(gui_elements);
 	}
+	gui_elements = NULL;
+	pthread_mutex_unlock(&mutex_lock);
 
 	logprintf(LOG_DEBUG, "garbage collected config gui library");
 
 	return EXIT_SUCCESS;
 }
 
-struct JsonNode *gui_sync(int level, const char *media) {
+struct JsonNode *config_gui_sync(int level, const char *media) {
 	/* Temporary pointer to the different structure */
 	struct gui_elements_t *tmp_gui = NULL;
 	struct gui_settings_t *tmp_settings = NULL;
@@ -550,7 +556,7 @@ clear:
 	return have_error;
 }
 
-int gui_read(struct JsonNode *root) {
+int config_gui_parse(struct JsonNode *root) {
 	struct gui_elements_t *dnode = NULL;
 	struct gui_elements_t *tmp_gui = NULL;
 	struct JsonNode *jelements = NULL;
@@ -621,11 +627,7 @@ clear:
 }
 
 void gui_init(void) {
-	/* Request hardware json object in main configuration */
-	config_register(&config_gui, "gui");
-	config_gui->readorder = 2;
-	config_gui->writeorder = 2;
-	config_gui->parse=&gui_read;
-	config_gui->sync=&gui_sync;
-	config_gui->gc=&gui_gc;
+	pthread_mutexattr_init(&mutex_attr);
+	pthread_mutexattr_settype(&mutex_attr, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(&mutex_lock, &mutex_attr);
 }

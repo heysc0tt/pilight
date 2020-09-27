@@ -70,6 +70,11 @@ static void parseCode(void) {
 	int i = 0, x = 0, y = 0, binary[RAW_LENGTH/2];
 	int id = -1, state = -1, unit = -1, all = 0, code = 0;
 
+	if(beamish_switch->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "beamish_switch: parsecode - invalid parameter passed %d", beamish_switch->rawlen);
+		return;
+	}
+
 	for(x=0;x<beamish_switch->rawlen;x+=2) {
 		if(beamish_switch->raw[x] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
 			binary[i++] = 1;
@@ -223,14 +228,14 @@ void beamishSwitchInit(void) {
 	beamish_switch->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	beamish_switch->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&beamish_switch->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&beamish_switch->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&beamish_switch->options, 'u', "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([1-4])$");
-	options_add(&beamish_switch->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$");
-	options_add(&beamish_switch->options, 'a', "all", OPTION_NO_VALUE, 0, JSON_NUMBER, NULL, NULL);
+	options_add(&beamish_switch->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&beamish_switch->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&beamish_switch->options, "u", "unit", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([1-4])$");
+	options_add(&beamish_switch->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-9]{1,4}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$");
+	options_add(&beamish_switch->options, "a", "all", OPTION_NO_VALUE, 0, JSON_NUMBER, NULL, NULL);
 
-	options_add(&beamish_switch->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&beamish_switch->options, 0, "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&beamish_switch->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&beamish_switch->options, "0", "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	beamish_switch->parseCode=&parseCode;
 	beamish_switch->createCode=&createCode;
@@ -241,7 +246,7 @@ void beamishSwitchInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "beamish_switch";
-	module->version = "1.1";
+	module->version = "1.2";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

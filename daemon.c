@@ -1,19 +1,9 @@
 /*
-	Copyright (C) 2013 - 2014 CurlyMo
+  Copyright (C) CurlyMo
 
-	This file is part of pilight.
-
-	pilight is free software: you can redistribute it and/or modify it under the
-	terms of the GNU General Public License as published by the Free Software
-	Foundation, either version 3 of the License, or (at your option) any later
-	version.
-
-	pilight is distributed in the hope that it will be useful, but WITHOUT ANY
-	WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
-
-	You should have received a copy of the GNU General Public License
-	along with pilight. If not, see	<http://www.gnu.org/licenses/>
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
 */
 
 #include <stdio.h>
@@ -47,6 +37,10 @@
 #include <time.h>
 #include <ctype.h>
 #include <dirent.h>
+#ifndef _WIN32
+#include <wiringx.h>
+#endif
+#include <assert.h>
 
 #include "libs/pilight/core/pilight.h"
 #include "libs/pilight/core/threads.h"
@@ -55,24 +49,27 @@
 #include "libs/pilight/core/network.h"
 #include "libs/pilight/core/gc.h"
 #include "libs/pilight/core/log.h"
+#include "libs/pilight/core/ssl.h"
 #include "libs/pilight/core/options.h"
 #include "libs/pilight/core/socket.h"
 #include "libs/pilight/core/json.h"
-#include "libs/pilight/core/irq.h"
 #include "libs/pilight/core/ssdp.h"
 #include "libs/pilight/core/dso.h"
 #include "libs/pilight/core/firmware.h"
 #include "libs/pilight/core/proc.h"
 #include "libs/pilight/core/ntp.h"
-#include "libs/pilight/core/config.h"
+#include "libs/pilight/config/config.h"
+#include "libs/pilight/config/hardware.h"
+#include "libs/pilight/lua_c/lua.h"
+#include "libs/pilight/lua_c/table.h"
 
 #ifdef EVENTS
 	#include "libs/pilight/events/events.h"
 #endif
 
 #ifdef WEBSERVER
-	#ifdef WEBSERVER_HTTPS	
-		#include "libs/polarssl/polarssl/md5.h"
+	#ifdef WEBSERVER_HTTPS
+		#include <mbedtls/md5.h>
 	#endif
 	#include "libs/pilight/core/webserver.h"
 #endif
@@ -83,7 +80,10 @@
 #include "libs/pilight/config/settings.h"
 #include "libs/pilight/config/gui.h"
 
-#include "libs/wiringx/wiringX.h"
+static uv_signal_t **signal_req = NULL;
+static int signals[5] = { SIGINT, SIGQUIT, SIGTERM, SIGABRT, SIGTSTP };
+static uv_timer_t *timer_abort_req = NULL;
+static uv_timer_t *timer_stats_req = NULL;
 
 #ifdef _WIN32
 static char server_name[40];
@@ -132,6 +132,9 @@ typedef struct recvqueue_t {
 static struct recvqueue_t *recvqueue;
 static struct recvqueue_t *recvqueue_head;
 
+static pthread_mutex_t config_lock;
+static pthread_mutexattr_t config_attr;
+
 static pthread_mutex_t sendqueue_lock;
 static pthread_cond_t sendqueue_signal;
 static pthread_mutexattr_t sendqueue_attr;
@@ -166,10 +169,8 @@ static struct protocol_t *procProtocol;
 
 /* The pid_file and pid of this daemon */
 #ifndef _WIN32
-static char *pid_file;
-static unsigned short pid_file_free = 0;
+static char *pid_file = NULL;
 #endif
-static pid_t pid;
 /* Daemonize or not */
 static int nodaemon = 0;
 /* Run tracktracer */
@@ -192,16 +193,19 @@ static struct timeval tv;
 static int standalone = 0;
 /* Do we need to connect to a master server:port? */
 static char *master_server = NULL;
-static unsigned short master_port = 0;
+static int master_port = 0;
 
+static int adhoc_pending = 0;
 static char *configtmp = NULL;
-static int verbosity = LOG_DEBUG;
+static int verbosity = LOG_INFO;
 struct socket_callback_t socket_callback;
 
 #ifdef _WIN32
 	static int console = 0;
 	static int oldverbosity = LOG_NOTICE;
 #endif
+
+static struct options_t *options = NULL;
 
 
 #ifdef WEBSERVER
@@ -212,8 +216,32 @@ static int webgui_websockets = WEBGUI_WEBSOCKETS;
 static int webserver_http_port = WEBSERVER_HTTP_PORT;
 /* The webroot of pilight */
 static char *webserver_root = NULL;
-static int webserver_root_free = 0;
 #endif
+
+static char *lua_root = LUA_ROOT;
+
+static void *reason_forward_free(void *param) {
+	FREE(param);
+	return NULL;
+}
+
+static void *reason_send_code_free(void *param) {
+	plua_metatable_free(param);
+	return NULL;
+}
+
+static void *reason_broadcast_core_free(void *param) {
+	char *code = param;
+	FREE(code);
+	return NULL;
+}
+
+static void *reason_socket_send_free(void *param) {
+	struct reason_socket_send_t *data = param;
+	FREE(data->buffer);
+	FREE(data);
+	return NULL;
+}
 
 static void client_remove(int id) {
 	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
@@ -284,7 +312,7 @@ static void broadcast_queue(char *protoname, struct JsonNode *json, enum origin_
 void *broadcast(void *param) {
 	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
 
-	int broadcasted = 0;
+	int broadcasted = 0/*, free_conf = 1*/;
 
 	pthread_mutex_lock(&bcqueue_lock);
 	while(main_loop) {
@@ -312,6 +340,7 @@ void *broadcast(void *param) {
 						}
 						tmp_clients = tmp_clients->next;
 					}
+
 					if(pilight.runmode == ADHOC && sockfd > 0) {
 						struct JsonNode *jupdate = json_decode(conf);
 						json_append_member(jupdate, "action", json_mkstring("update"));
@@ -324,7 +353,7 @@ void *broadcast(void *param) {
 					if(broadcasted == 1) {
 						logprintf(LOG_DEBUG, "broadcasted: %s", conf);
 					}
-					json_free(conf);
+					eventpool_trigger(REASON_BROADCAST_CORE, reason_broadcast_core_free, conf);
 				} else {
 					/* Update the config */
 					if(devices_update(bcqueue->protoname, bcqueue->jmessage, bcqueue->origin, &jret) == 0) {
@@ -380,8 +409,9 @@ void *broadcast(void *param) {
 							}
 							tmp_clients = tmp_clients->next;
 						}
+						eventpool_trigger(REASON_BROADCAST_CORE, reason_broadcast_core_free, tmp);
 
-						json_free(tmp);
+						// json_free(tmp);
 						json_delete(jret);
 					}
 
@@ -409,9 +439,12 @@ void *broadcast(void *param) {
 							json_find_number(code, "lpf", &firmware.lpf);
 							json_find_number(code, "hpf", &firmware.hpf);
 							if(firmware.version > 0 && firmware.lpf > 0 && firmware.hpf > 0) {
-								registry_set_number("pilight.firmware.version", firmware.version, 0);
-								registry_set_number("pilight.firmware.lpf", firmware.lpf, 0);
-								registry_set_number("pilight.firmware.hpf", firmware.hpf, 0);
+								struct lua_state_t *state = plua_get_free_state();
+								config_registry_set_number(state->L, "pilight.firmware.version", firmware.version);
+								config_registry_set_number(state->L, "pilight.firmware.lpf", firmware.lpf);
+								config_registry_set_number(state->L, "pilight.firmware.hpf", firmware.hpf);
+								assert(plua_check_stack(state->L, 0) == 0);
+								plua_clear_state(state);
 
 								struct JsonNode *jmessage = json_mkobject();
 								struct JsonNode *jcode = json_mkobject();
@@ -463,7 +496,8 @@ void *broadcast(void *param) {
 						logprintf(LOG_DEBUG, "broadcasted: %s", out);
 					}
 					json_free(internal);
-					json_free(out);
+					// json_free(out);
+					eventpool_trigger(REASON_BROADCAST_CORE, reason_broadcast_core_free, out);
 				}
 			}
 			struct bcqueue_t *tmp = bcqueue;
@@ -558,9 +592,28 @@ static void receive_parse_api(struct JsonNode *code, int hwtype) {
 		if(protocol->hwtype == hwtype && protocol->parseCommand != NULL) {
 			protocol->parseCommand(code);
 			receiver_create_message(protocol);
-		}		
+		}
 		pnode = pnode->next;
 	}
+}
+
+static void *receiveAPI1(int reason, void *param, void *userdata) {
+	struct plua_metatable_t *table = param;
+	struct JsonNode *json = NULL;
+	char *protocol = NULL;
+	char *origin = NULL;
+
+	plua_metatable_to_json(table, &json);
+
+	if(json != NULL &&
+		json_find_string(json, "protocol", &protocol) == 0 &&
+		json_find_string(json, "origin", &origin) == 0) {
+		broadcast_queue(protocol, json, RECEIVER);
+	}
+	if(json != NULL) {
+		json_delete(json);
+	}
+	return NULL;
 }
 
 void *receive_parse_code(void *param) {
@@ -655,7 +708,6 @@ void *send_code(void *param) {
 			sending = 1;
 
 			struct protocol_t *protocol = sendqueue->protopt;
-			struct hardware_t *hw = NULL;
 
 			struct JsonNode *message = NULL;
 
@@ -682,59 +734,41 @@ void *send_code(void *param) {
 				}
 			}
 
-			struct conf_hardware_t *tmp_confhw = conf_hardware;
-			while(tmp_confhw) {
-				if(protocol->hwtype == tmp_confhw->hardware->hwtype) {
-					hw = tmp_confhw->hardware;
-					break;
+			if(protocol->hwtype == RF433 || protocol->hwtype == RF868) {
+				logprintf(LOG_DEBUG, "**** RAW CODE ****");
+				if(log_level_get() >= LOG_DEBUG) {
+					for(i=0;i<sendqueue->length;i++) {
+						printf("%d ", sendqueue->code[i]);
+					}
+					printf("\n");
 				}
-				tmp_confhw = tmp_confhw->next;
-			}
-			if(hw != NULL) {
-				if((hw->comtype == COMOOK || hw->comtype == COMPLSTRAIN) && hw->sendOOK != NULL) {
-					if(hw->receiveOOK != NULL || hw->receivePulseTrain != NULL) {
-						hw->wait = 1;
-						pthread_mutex_unlock(&hw->lock);
-						pthread_cond_signal(&hw->signal);
-					}
-					logprintf(LOG_DEBUG, "**** RAW CODE ****");
-					if(log_level_get() >= LOG_DEBUG) {
-						for(i=0;i<sendqueue->length;i++) {
-							printf("%d ", sendqueue->code[i]);
-						}
-						printf("\n");
-					}
-					logprintf(LOG_DEBUG, "**** RAW CODE ****");
+				logprintf(LOG_DEBUG, "**** RAW CODE ****");
 
-					if(hw->sendOOK(sendqueue->code, sendqueue->length, protocol->txrpt) == 0) {
-						logprintf(LOG_DEBUG, "successfully send %s code", protocol->id);
-					} else {
-						logprintf(LOG_ERR, "failed to send code");
-					}
-					if(strcmp(protocol->id, "raw") == 0) {
-						int plslen = sendqueue->code[sendqueue->length-1]/PULSE_DIV;
-						receive_queue(sendqueue->code, sendqueue->length, plslen, -1);
-					}
-					if(hw->receiveOOK != NULL || hw->receivePulseTrain != NULL) {
-						hw->wait = 0;
-						pthread_mutex_unlock(&hw->lock);
-						pthread_cond_signal(&hw->signal);
-					}
-				} else if(hw->comtype == COMAPI && hw->sendAPI != NULL) {
-					if(message != NULL) {				
-						if(hw->sendAPI(message) == 0) {
-							logprintf(LOG_DEBUG, "successfully send %s command", protocol->id);
-						} else {
-							logprintf(LOG_ERR, "failed to send command");
-						}
-					}
+				struct plua_metatable_t *table = NULL;
+				plua_metatable_init(&table);
+
+				char key[255];
+				memset(&key, 0, 255);
+
+				plua_metatable_set_number(table, "rawlen", sendqueue->length);
+				plua_metatable_set_number(table, "txrpt", protocol->txrpt);
+				plua_metatable_set_string(table, "protocol", protocol->id);
+				plua_metatable_set_number(table, "hwtype", protocol->hwtype);
+				plua_metatable_set_string(table, "uuid", "0");
+
+				for(i=0;i<sendqueue->length;i++) {
+					snprintf(key, 255, "pulses.%d", i+1);
+					plua_metatable_set_number(table, key, sendqueue->code[i]);
 				}
-			} else {
-				if(strcmp(protocol->id, "raw") == 0) {
-					int plslen = sendqueue->code[sendqueue->length-1]/PULSE_DIV;
-					receive_queue(sendqueue->code, sendqueue->length, plslen, -1);
-				}
+
+				eventpool_trigger(REASON_SEND_CODE+10000, reason_send_code_free, table);
 			}
+
+			if(strcmp(protocol->id, "raw") == 0) {
+				int plslen = sendqueue->code[sendqueue->length-1]/PULSE_DIV;
+				receive_queue(sendqueue->code, sendqueue->length, plslen, -1);
+			}
+
 			if(message != NULL) {
 				broadcast_queue(sendqueue->protoname, message, sendqueue->origin);
 				json_delete(message);
@@ -830,7 +864,7 @@ static int send_queue(struct JsonNode *json, enum origin_t origin) {
 				}
 				jprotocol = jprotocol->next;
 			}
-			memset(raw, 0, MAXPULSESTREAMLENGTH-1);
+			memset(raw, 0, sizeof(raw));
 			protocol->raw = raw;
 			if(match == 1 && protocol->createCode != NULL) {
 				/* Let the protocol create his code */
@@ -936,11 +970,10 @@ static void client_webserver_parse_code(int i, char buffer[BUFFER_SIZE]) {
 	int sd = socket_get_clients(i);
 	int x = 0;
 	FILE *f;
-	unsigned char *p = NULL;
-	unsigned char buff[BUFFER_SIZE];
+	char *p = NULL;
+	char buff[BUFFER_SIZE];
 	char *cache = NULL;
 	char *path = NULL, buf[INET_ADDRSTRLEN+1];
-	char *mimetype = NULL;
 	struct stat sb;
 	struct sockaddr_in sockin;
 	socklen_t len = sizeof(sockin);
@@ -960,8 +993,7 @@ static void client_webserver_parse_code(int i, char buffer[BUFFER_SIZE]) {
 			sprintf(path, "%s/logo.png", webserver_root);
 			if((f = fopen(path, "rb"))) {
 				fstat(fileno(f), &sb);
-				mimetype = webserver_mimetype("image/png");
-				webserver_create_header(&p, "200 OK", mimetype, (unsigned int)sb.st_size);
+				webserver_create_header(&p, "200 OK", "image/png", (unsigned int)sb.st_size);
 				send(sd, (const char *)buff, (size_t)(p-buff), MSG_NOSIGNAL);
 				x = 0;
 				if((cache = MALLOC(BUFFER_SIZE)) == NULL) {
@@ -975,15 +1007,13 @@ static void client_webserver_parse_code(int i, char buffer[BUFFER_SIZE]) {
 				}
 				fclose(f);
 				FREE(cache);
-				FREE(mimetype);
 			} else {
 				logprintf(LOG_WARNING, "pilight logo not found");
 			}
 			FREE(path);
 		} else {
 		    /* Catch all webserver page to inform users on which port the webserver runs */
-			mimetype = webserver_mimetype("text/html");
-			webserver_create_header(&p, "200 OK", mimetype, (unsigned int)BUFFER_SIZE);
+			webserver_create_header(&p, "200 OK", "text/html", (unsigned int)BUFFER_SIZE);
 			send(sd, (const char *)buff, (size_t)(p-buff), MSG_NOSIGNAL);
 			if(webserver_enable == 1) {
 				if((cache = MALLOC(BUFFER_SIZE)) == NULL) {
@@ -1008,7 +1038,6 @@ static void client_webserver_parse_code(int i, char buffer[BUFFER_SIZE]) {
 			} else {
 				send(sd, "<body><center><img src=\"logo.png\"></center></body></html>", 57, MSG_NOSIGNAL);
 			}
-			FREE(mimetype);
 		}
 	}
 }
@@ -1102,8 +1131,9 @@ static int control_device(struct devices_t *dev, char *state, struct JsonNode *v
 
 	/* Construct the right json object */
 	json_append_member(code, "protocol", jprotocols);
-	if(dev->dev_uuid != NULL && (dev->protocols->listener->hwtype == SENSOR
-	   || dev->protocols->listener->hwtype == HWRELAY)) {
+	if(dev->dev_uuid != NULL && dev->cst_uuid == 1) {
+	// if(dev->dev_uuid != NULL && (dev->protocols->listener->hwtype == SENSOR
+	   // || dev->protocols->listener->hwtype == HWRELAY)) {
 		json_append_member(code, "uuid", json_mkstring(dev->dev_uuid));
 	}
 	json_append_member(json, "code", code);
@@ -1116,6 +1146,16 @@ static int control_device(struct devices_t *dev, char *state, struct JsonNode *v
 
 	json_delete(json);
 	return -1;
+}
+
+static void *control_device1(int reason, void *param, void *userdata) {
+	struct reason_control_device_t *data = param;
+	struct devices_t *dev = NULL;
+
+	if(devices_get(data->dev, &dev) == 0) {
+		control_device(dev, data->state, json_first_child(data->values), ORIGIN_ACTION);
+	}
+	return NULL;
 }
 
 /* Parse the incoming buffer from the client */
@@ -1298,9 +1338,6 @@ static void socket_parse_data(int i, char *buffer) {
 					struct JsonNode *value = NULL;
 					char *type = NULL;
 					char *key = NULL;
-					char *sval = NULL;
-					double nval = 0.0;
-					int dec = 0;
 					if(json_find_string(json, "type", &type) != 0) {
 						logprintf(LOG_ERR, "client did not send a type of action");
 					} else {
@@ -1313,17 +1350,23 @@ static void socket_parse_data(int i, char *buffer) {
 								socket_write(sd, "{\"status\":\"failed\"}");
 							} else {
 								if(value->tag == JSON_NUMBER) {
-									if(registry_set_number(key, value->number_, value->decimals_) == 0) {
+									struct lua_state_t *state = plua_get_free_state();
+									if(config_registry_set_number(state->L, key, value->number_) == 0) {
 										socket_write(sd, "{\"status\":\"success\"}");
 									} else {
 										socket_write(sd, "{\"status\":\"failed\"}");
 									}
+									assert(plua_check_stack(state->L, 0) == 0);
+									plua_clear_state(state);
 								} else if(value->tag == JSON_STRING) {
-									if(registry_set_string(key, value->string_) == 0) {
+									struct lua_state_t *state = plua_get_free_state();
+									if(config_registry_set_string(state->L, key, value->string_) == 0) {
 										socket_write(sd, "{\"status\":\"success\"}");
 									} else {
 										socket_write(sd, "{\"status\":\"failed\"}");
 									}
+									assert(plua_check_stack(state->L, 0) == 0);
+									plua_clear_state(state);
 								} else {
 									logprintf(LOG_ERR, "registry value can only be a string or number");
 									socket_write(sd, "{\"status\":\"failed\"}");
@@ -1334,35 +1377,50 @@ static void socket_parse_data(int i, char *buffer) {
 								logprintf(LOG_ERR, "client did not send a registry key");
 								socket_write(sd, "{\"status\":\"failed\"}");
 							} else {
-								if(registry_remove_value(key) == 0) {
+								struct lua_state_t *state = plua_get_free_state();
+								if(config_registry_set_null(state->L, key) == 0) {
 									socket_write(sd, "{\"status\":\"success\"}");
 								} else {
 									socket_write(sd, "{\"status\":\"failed\"}");
 								}
+								assert(plua_check_stack(state->L, 0) == 0);
+								plua_clear_state(state);
 							}
 						} else if(strcmp(type, "get") == 0) {
 							if(json_find_string(json, "key", &key) != 0) {
 								logprintf(LOG_ERR, "client did not send a registry key");
 								socket_write(sd, "{\"status\":\"failed\"}");
 							} else {
-								if(registry_get_number(key, &nval, &dec) == 0) {
-									struct JsonNode *jsend = json_mkobject();
-									json_append_member(jsend, "message", json_mkstring("registry"));
-									json_append_member(jsend, "value", json_mknumber(nval, dec));
-									json_append_member(jsend, "key", json_mkstring(key));
-									char *output = json_stringify(jsend, NULL);
-									socket_write(sd, output);
-									json_free(output);
-									json_delete(jsend);
-								} else if(registry_get_string(key, &sval) == 0) {
-									struct JsonNode *jsend = json_mkobject();
-									json_append_member(jsend, "message", json_mkstring("registry"));
-									json_append_member(jsend, "value", json_mkstring(sval));
-									json_append_member(jsend, "key", json_mkstring(key));
-									char *output = json_stringify(jsend, NULL);
-									socket_write(sd, output);
-									json_free(output);
-									json_delete(jsend);
+								struct varcont_t out;
+								memset(&out, 0, sizeof(struct varcont_t));
+								struct lua_state_t *state = plua_get_free_state();
+								if(config_registry_get(state->L, key, &out) == 0) {
+									assert(plua_check_stack(state->L, 0) == 0);
+									plua_clear_state(state);
+									if(out.type_ == JSON_NUMBER) {
+										struct JsonNode *jsend = json_mkobject();
+										json_append_member(jsend, "message", json_mkstring("registry"));
+										json_append_member(jsend, "value", json_mknumber(out.number_, 0));
+										json_append_member(jsend, "key", json_mkstring(key));
+										char *output = json_stringify(jsend, NULL);
+										socket_write(sd, output);
+										json_free(output);
+										json_delete(jsend);
+									} else if(out.type_ == JSON_STRING) {
+										struct JsonNode *jsend = json_mkobject();
+										json_append_member(jsend, "message", json_mkstring("registry"));
+										json_append_member(jsend, "value", json_mkstring(out.string_));
+										json_append_member(jsend, "key", json_mkstring(key));
+										char *output = json_stringify(jsend, NULL);
+										socket_write(sd, output);
+										json_free(output);
+										json_delete(jsend);
+									} else {
+										assert(plua_check_stack(state->L, 0) == 0);
+										plua_clear_state(state);
+										logprintf(LOG_ERR, "registry key '%s' doesn't exists", key);
+										socket_write(sd, "{\"status\":\"failed\"}");
+									}
 								} else {
 									logprintf(LOG_ERR, "registry key '%s' doesn't exists", key);
 									socket_write(sd, "{\"status\":\"failed\"}");
@@ -1394,6 +1452,14 @@ static void socket_parse_data(int i, char *buffer) {
 					socket_write(sd, output);
 					json_free(output);
 					json_delete(jsend);
+					/* send version packet */
+					struct JsonNode *jsend_version = json_mkobject();
+					json_append_member(jsend_version, "version", json_mkstring(PILIGHT_VERSION));
+					char *output_version = json_stringify(jsend_version, NULL);
+					socket_write(sd, output_version);
+					json_free(output_version);
+					json_delete(jsend_version);
+
 				/*
 				 * Parse received codes from nodes
 				 */
@@ -1449,127 +1515,605 @@ static void socket_parse_data(int i, char *buffer) {
 	}
 }
 
+/* Rewrite code start */
+
+static int socket_parse_responses(char *buffer, char *media, char **respons) {
+	struct JsonNode *json = NULL;
+	char *action = NULL, *status = NULL;
+
+	if(strcmp(buffer, "HEART") == 0) {
+		if((*respons = MALLOC(strlen("BEAT")+1)) == NULL) {
+			OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+		}
+		strcpy(*respons, "BEAT");
+		return 0;
+	}	else {
+		if(pilight.runmode != ADHOC) {
+			logprintf(LOG_DEBUG, "socket recv: %s", buffer);
+		}
+
+		if(json_validate(buffer) == true) {
+			json = json_decode(buffer);
+			if((json_find_string(json, "status", &status)) == 0) {
+				if(strcmp(status, "success") == 0) {
+					if((*respons = MALLOC(strlen("{\"status\":\"success\"}")+1)) == NULL) {
+						OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+					}
+					strcpy(*respons, "{\"status\":\"success\"}");
+					json_delete(json);
+					return 0;
+				}
+			}
+			if((json_find_string(json, "action", &action)) == 0) {
+				if(strcmp(action, "send") == 0) {
+					if(send_queue(json, ORIGIN_SENDER) == 0) {
+						if((*respons = MALLOC(strlen("{\"status\":\"success\"}")+1)) == NULL) {
+							OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+						}
+						strcpy(*respons, "{\"status\":\"success\"}");
+						json_delete(json);
+						return 0;
+					} else {
+						if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+							OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+						}
+						strcpy(*respons, "{\"status\":\"failed\"}");
+						json_delete(json);
+						return 0;
+					}
+				} else if(strcmp(action, "control") == 0) {
+					struct JsonNode *code = NULL;
+					char *device = NULL;
+					struct devices_t *dev = NULL;
+					if((code = json_find_member(json, "code")) == NULL || code->tag != JSON_OBJECT) {
+						logprintf(LOG_ERR, "client did not send any codes");
+						json_delete(json);
+						return -1;
+					} else {
+						/* Check if a location and device are given */
+						if(json_find_string(code, "device", &device) != 0) {
+							logprintf(LOG_ERR, "client did not send a device");
+							json_delete(json);
+							return -1;
+						/* Check if the device and location exists in the config file */
+						} else if(devices_get(device, &dev) == 0) {
+							char *state = NULL;
+							struct JsonNode *values = NULL;
+
+							json_find_string(code, "state", &state);
+							if((values = json_find_member(code, "values")) != NULL) {
+								values = json_first_child(values);
+							}
+
+							if(control_device(dev, state, values, ORIGIN_SENDER) == 0) {
+								if((*respons = MALLOC(strlen("{\"status\":\"success\"}")+1)) == NULL) {
+									OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+								}
+								strcpy(*respons, "{\"status\":\"success\"}");
+								json_delete(json);
+								return 0;
+							} else {
+								if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+									OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+								}
+								strcpy(*respons, "{\"status\":\"failed\"}");
+								json_delete(json);
+								return 0;
+							}
+						} else {
+							logprintf(LOG_ERR, "the device \"%s\" does not exist", device);
+							json_delete(json);
+							return -1;
+						}
+					}
+				} else if(strcmp(action, "registry") == 0) {
+					struct JsonNode *value = NULL;
+					char *type = NULL;
+					char *key = NULL;
+					char *sval = NULL;
+					double nval = 0.0;
+					int dec = 0;
+					if(json_find_string(json, "type", &type) != 0) {
+						logprintf(LOG_ERR, "client did not send a type of action");
+						json_delete(json);
+						return -1;
+					} else {
+						if(strcmp(type, "set") == 0) {
+							if(json_find_string(json, "key", &key) != 0) {
+								logprintf(LOG_ERR, "client did not send a registry key");
+								if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+									OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+								}
+								strcpy(*respons, "{\"status\":\"failed\"}");
+								json_delete(json);
+								return 0;
+							} else if((value = json_find_member(json, "value")) == NULL) {
+								logprintf(LOG_ERR, "client did not send a registry value");
+								if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+									OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+								}
+								strcpy(*respons, "{\"status\":\"failed\"}");
+								json_delete(json);
+								return 0;
+							} else {
+								if(value->tag == JSON_NUMBER) {
+									struct lua_state_t *state = plua_get_free_state();
+									if(config_registry_set_number(state->L, key, value->number_) == 0) {
+										assert(plua_check_stack(state->L, 0) == 0);
+										plua_clear_state(state);
+										if((*respons = MALLOC(strlen("{\"status\":\"success\"}")+1)) == NULL) {
+											OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+										}
+										strcpy(*respons, "{\"status\":\"success\"}");
+										json_delete(json);
+										return 0;
+									} else {
+										assert(plua_check_stack(state->L, 0) == 0);
+										plua_clear_state(state);
+										if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+											OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+										}
+										strcpy(*respons, "{\"status\":\"failed\"}");
+										json_delete(json);
+										return 0;
+									}
+								} else if(value->tag == JSON_STRING) {
+									struct lua_state_t *state = plua_get_free_state();
+									if(config_registry_set_string(state->L, key, value->string_) == 0) {
+										assert(plua_check_stack(state->L, 0) == 0);
+										plua_clear_state(state);
+										if((*respons = MALLOC(strlen("{\"status\":\"success\"}")+1)) == NULL) {
+											OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+										}
+										strcpy(*respons, "{\"status\":\"success\"}");
+										json_delete(json);
+										return 0;
+									} else {
+										assert(plua_check_stack(state->L, 0) == 0);
+										plua_clear_state(state);
+										if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+											OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+										}
+										strcpy(*respons, "{\"status\":\"failed\"}");
+										json_delete(json);
+										return 0;
+									}
+								} else {
+									logprintf(LOG_ERR, "registry value can only be a string or number");
+									if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+										OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+									}
+									strcpy(*respons, "{\"status\":\"failed\"}");
+									json_delete(json);
+									return 0;
+								}
+							}
+						} else if(strcmp(type, "remove") == 0) {
+							if(json_find_string(json, "key", &key) != 0) {
+								logprintf(LOG_ERR, "client did not send a registry key");
+								if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+									OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+								}
+								strcpy(*respons, "{\"status\":\"failed\"}");
+								json_delete(json);
+								return 0;
+							} else {
+								struct lua_state_t *state = plua_get_free_state();
+								if(config_registry_set_null(state->L, key) == 0) {
+									assert(plua_check_stack(state->L, 0) == 0);
+									plua_clear_state(state);
+									if((*respons = MALLOC(strlen("{\"status\":\"success\"}")+1)) == NULL) {
+										OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+									}
+									strcpy(*respons, "{\"status\":\"success\"}");
+									json_delete(json);
+									return 0;
+								} else {
+									assert(plua_check_stack(state->L, 0) == 0);
+									plua_clear_state(state);
+									logprintf(LOG_ERR, "registry value can only be a string or number");
+									if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+										OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+									}
+									strcpy(*respons, "{\"status\":\"failed\"}");
+									json_delete(json);
+									return 0;
+								}
+							}
+						} else if(strcmp(type, "get") == 0) {
+							if(json_find_string(json, "key", &key) != 0) {
+								logprintf(LOG_ERR, "client did not send a registry key");
+								if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+									OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+								}
+								strcpy(*respons, "{\"status\":\"failed\"}");
+								json_delete(json);
+								return 0;
+							} else {
+								struct varcont_t out;
+								memset(&out, 0, sizeof(struct varcont_t));
+								struct lua_state_t *state = plua_get_free_state();
+								if(config_registry_get(state->L, key, &out) == 0) {
+									assert(plua_check_stack(state->L, 0) == 0);
+									plua_clear_state(state);
+									if(out.type_ == JSON_NUMBER) {
+										struct JsonNode *jsend = json_mkobject();
+										json_append_member(jsend, "message", json_mkstring("registry"));
+										json_append_member(jsend, "value", json_mknumber(nval, dec));
+										json_append_member(jsend, "key", json_mkstring(key));
+										char *output = json_stringify(jsend, NULL);
+										if((*respons = MALLOC(strlen(output)+1)) == NULL) {
+											OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+										}
+										strcpy(*respons, output);
+										json_free(output);
+										json_delete(jsend);
+										json_delete(json);
+										return 0;
+									} else if(out.type_ == JSON_STRING) {
+										struct JsonNode *jsend = json_mkobject();
+										json_append_member(jsend, "message", json_mkstring("registry"));
+										json_append_member(jsend, "value", json_mkstring(sval));
+										json_append_member(jsend, "key", json_mkstring(key));
+										char *output = json_stringify(jsend, NULL);
+										if((*respons = MALLOC(strlen(output)+1)) == NULL) {
+											OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+										}
+										strcpy(*respons, output);
+										json_free(output);
+										json_delete(jsend);
+										json_delete(json);
+										return 0;
+									} else {
+										logprintf(LOG_ERR, "registry key '%s' does not exist", key);
+										if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+											OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+										}
+										strcpy(*respons, "{\"status\":\"failed\"}");
+										json_delete(json);
+										return 0;
+									}
+								} else {
+									assert(plua_check_stack(state->L, 0) == 0);
+									plua_clear_state(state);
+									logprintf(LOG_ERR, "registry key '%s' does not exist", key);
+									if((*respons = MALLOC(strlen("{\"status\":\"failed\"}")+1)) == NULL) {
+										OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+									}
+									strcpy(*respons, "{\"status\":\"failed\"}");
+									json_delete(json);
+									return 0;
+								}
+							}
+						}
+					}
+				} else if(strcmp(action, "request config") == 0) {
+					struct JsonNode *jsend = json_mkobject();
+					struct JsonNode *jconfig = NULL;
+					jconfig = config_print(CONFIG_INTERNAL, media);
+					json_append_member(jsend, "message", json_mkstring("config"));
+					json_append_member(jsend, "config", jconfig);
+					char *output = json_stringify(jsend, NULL);
+					str_replace("%", "%%", &output);
+					if((*respons = MALLOC(strlen(output)+1)) == NULL) {
+						OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+					}
+					strcpy(*respons, output);
+					json_free(output);
+					json_delete(jsend);
+					json_delete(json);
+					return 0;
+				} else if(strcmp(action, "request values") == 0) {
+					struct JsonNode *jsend = json_mkobject();
+#ifdef PILIGHT_REWRITE
+					struct JsonNode *jvalues = values_print(media);
+#else
+					JsonNode *jvalues = devices_values(media);
+#endif
+					json_append_member(jsend, "message", json_mkstring("values"));
+					json_append_member(jsend, "values", jvalues);
+					char *output = json_stringify(jsend, NULL);
+					if((*respons = MALLOC(strlen(output)+1)) == NULL) {
+						OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+					}
+					strcpy(*respons, output);
+					json_free(output);
+					json_delete(jsend);
+					json_delete(json);
+					return 0;
+				}
+			} else {
+				json_delete(json);
+				return -1;
+			}
+		}
+	}
+	return -1;
+}
+
+static void *socket_parse_data1(int reason, void *param, void *userdata) {
+	struct reason_socket_received_t *data = param;
+
+	struct sockaddr_in address;
+	socklen_t socklen = sizeof(address);
+
+	struct JsonNode *json = NULL;
+	struct JsonNode *options = NULL;
+	struct clients_t *tmp_clients = NULL;
+	struct clients_t *client = NULL;
+	char *action = NULL, *media = NULL, *status = NULL, *respons = NULL;
+	char all[] = "all";
+	int error = 0, exists = 0, sd = -1;
+
+	if(strlen(data->type) == 0) {
+		logprintf(LOG_ERR, "socket data misses a socket type");
+	}
+
+	if(data->buffer == NULL) {
+		logprintf(LOG_ERR, "socket message incorrectly formatted");
+		return NULL;
+	}
+
+	sd = data->fd;
+	getpeername(sd, (struct sockaddr*)&address, &socklen);
+
+	tmp_clients = clients;
+	while(tmp_clients) {
+		if(tmp_clients->id == sd) {
+			exists = 1;
+			client = tmp_clients;
+			break;
+		}
+		tmp_clients = tmp_clients->next;
+	}
+	if(exists == 0) {
+		media = all;
+	} else {
+		media = client->media;
+	}
+
+	if(json_validate(data->buffer) == true) {
+		json = json_decode(data->buffer);
+		if((json_find_string(json, "action", &action)) == 0) {
+			if(strcmp(action, "identify") == 0) {
+				/* Check if client doesn't already exist */
+				if(exists == 0) {
+					if((client = MALLOC(sizeof(struct clients_t))) == NULL) {
+						OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+					}
+					client->core = 0;
+					client->config = 0;
+					client->receiver = 0;
+					client->forward = 0;
+					client->stats = 0;
+					client->cpu = 0;
+					strcpy(client->media, "all");
+					client->next = NULL;
+					client->id = sd;
+					memset(client->uuid, '\0', sizeof(client->uuid));
+				}
+				if(json_find_string(json, "media", &media) == 0) {
+					if(strcmp(media, "all") == 0 || strcmp(media, "mobile") == 0 ||
+						 strcmp(media, "desktop") == 0 || strcmp(media, "web") == 0) {
+						strcpy(client->media, media);
+					}
+				} else {
+					strcpy(client->media, "all");
+				}
+				char *t = NULL;
+				if(json_find_string(json, "uuid", &t) == 0) {
+					strcpy(client->uuid, t);
+				}
+				if((options = json_find_member(json, "options")) != NULL) {
+					struct JsonNode *childs = json_first_child(options);
+					while(childs) {
+						if(strcmp(childs->key, "core") == 0 &&
+							 childs->tag == JSON_NUMBER) {
+							if((int)childs->number_ == 1) {
+								client->core = 1;
+							} else {
+								client->core = 0;
+							}
+						} else if(strcmp(childs->key, "stats") == 0 &&
+							 childs->tag == JSON_NUMBER) {
+							if((int)childs->number_ == 1) {
+								client->stats = 1;
+							} else {
+								client->stats = 0;
+							}
+						} else if(strcmp(childs->key, "receiver") == 0 &&
+							 childs->tag == JSON_NUMBER) {
+							if((int)childs->number_ == 1) {
+								client->receiver = 1;
+							} else {
+								client->receiver = 0;
+							}
+						} else if(strcmp(childs->key, "config") == 0 &&
+							 childs->tag == JSON_NUMBER) {
+							if((int)childs->number_ == 1) {
+								client->config = 1;
+							} else {
+								client->config = 0;
+							}
+						} else if(strcmp(childs->key, "forward") == 0 &&
+							 childs->tag == JSON_NUMBER) {
+							if((int)childs->number_ == 1) {
+								client->forward = 1;
+							} else {
+								client->forward = 0;
+							}
+						} else {
+						 error = 1;
+						 break;
+						}
+						childs = childs->next;
+					}
+				}
+				if(exists == 0) {
+					if(error == -1) {
+						FREE(client);
+					} else {
+						tmp_clients = clients;
+						if(tmp_clients) {
+							while(tmp_clients->next != NULL) {
+								tmp_clients = tmp_clients->next;
+							}
+							tmp_clients->next = client;
+						} else {
+							client->next = clients;
+							clients = client;
+						}
+						socket_write(sd, "{\"status\":\"success\"}");
+						json_delete(json);
+						return NULL;
+					}
+				}
+				json_delete(json);
+				return NULL;
+			/*
+			 * Parse received codes from nodes
+			 */
+			} else if(strcmp(action, "update") == 0) {
+				if(exists == 1) {
+					struct JsonNode *jvalues = NULL;
+					char *pname = NULL;
+					if((jvalues = json_find_member(json, "values")) != NULL) {
+						exists = 0;
+						tmp_clients = clients;
+						while(tmp_clients) {
+							if(tmp_clients->id == sd) {
+								exists = 1;
+								client = tmp_clients;
+								break;
+							}
+							tmp_clients = tmp_clients->next;
+						}
+						if(exists == 1) {
+							json_find_number(jvalues, "cpu", &client->cpu);
+						}
+					}
+					if(json_find_string(json, "protocol", &pname) == 0) {
+						char *out = MALLOC(strlen(data->buffer)+1);
+						if(out == NULL) {
+							OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+						}
+						strcpy(out, data->buffer);
+						eventpool_trigger(REASON_FORWARD, reason_forward_free, out);
+						json_delete(json);
+						return NULL;
+					}
+				}
+				json_delete(json);
+				return NULL;
+			} else if((json_find_string(json, "status", &status)) == 0) {
+				tmp_clients = clients;
+				while(tmp_clients) {
+					if(tmp_clients->id == sd) {
+						exists = 1;
+						client = tmp_clients;
+						break;
+					}
+					tmp_clients = tmp_clients->next;
+				}
+				if(strcmp(status, "success") == 0) {
+					logprintf(LOG_DEBUG, "client \"%s\" successfully executed our latest request", client->uuid);
+					json_delete(json);
+					return NULL;
+				} else if(strcmp(status, "failed") == 0) {
+					logprintf(LOG_DEBUG, "client \"%s\" failed executing our latest request", client->uuid);
+					json_delete(json);
+					return NULL;
+				}
+
+				json_delete(json);
+				return NULL;
+			}
+		}
+	}
+
+	if(socket_parse_responses(data->buffer, media, &respons) == 0) {
+		struct reason_socket_send_t *data1 = MALLOC(sizeof(struct reason_socket_send_t));
+		if(data1 == NULL) {
+			OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+		}
+		data1->fd = sd;
+		if((data1->buffer = MALLOC(strlen(respons)+1)) == NULL) {
+			OUT_OF_MEMORY /*LCOV_EXCL_LINE*/;
+		}
+		strcpy(data1->buffer, respons);
+		strncpy(data1->type, data->type, 255);
+
+		eventpool_trigger(REASON_SOCKET_SEND, reason_socket_send_free, data1);
+
+		FREE(respons);
+		json_delete(json);
+		return NULL;
+	} else {
+		logprintf(LOG_ERR, "could not parse response to: %s", data->buffer);
+		client_remove(sd);
+		socket_close(sd);
+		json_delete(json);
+		return NULL;
+	}
+	json_delete(json);
+	return NULL;
+}
+/* Rewrite code end */
+
 static void socket_client_disconnected(int i) {
 	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
 
 	client_remove(socket_get_clients(i));
 }
 
-void *receivePulseTrain(void *param) {
-	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
+static void *receivePulseTrain1(int reason, void *param, void *userdata) {
+	char *hardware = NULL;
+	double length = 0.0;
 
-	struct rawcode_t r;
-	r.length = 0;
-	int plslen = 0;
-#ifdef _WIN32
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-#else
-	/* Make sure the pilight receiving gets
-	   the highest priority available */
-	struct sched_param sched;
-	memset(&sched, 0, sizeof(sched));
-	sched.sched_priority = 70;
-	pthread_setschedparam(pthread_self(), SCHED_FIFO, &sched);
-#endif
+	int buffer[1024];
+	{
+		struct plua_metatable_t *table = param;
+		char nr[255], *p = nr;
+		double pulse = 0.0;
 
-	struct hardware_t *hw = (hardware_t *)param;
-	pthread_mutex_lock(&hw->lock);
-	hw->running = 1;
+		memset(&nr, 0, 255);
 
-	while(main_loop == 1 && hw->receivePulseTrain != NULL && hw->stop == 0) {
-		if(hw->wait == 0) {
-			pthread_mutex_lock(&hw->lock);
-			logprintf(LOG_STACK, "%s::unlocked", __FUNCTION__);
+		int i = 0;
+		plua_metatable_get_number(table, "length", &length);
+		plua_metatable_get_string(table, "hardware", &hardware);
 
-			hw->receivePulseTrain(&r);
-			plslen = r.pulses[r.length-1]/PULSE_DIV;
-			if(r.length > 0) {
-				receive_queue(r.pulses, r.length, plslen, hw->hwtype);
-			} else if(r.length == -1) {
-				hw->init();
-				sleep(1);
-			}
-
-			pthread_mutex_unlock(&hw->lock);
-		} else {
-			pthread_cond_wait(&hw->signal, &hw->lock);
+		for(i=0;i<length;i++) {
+			snprintf(p, 254, "pulses.%d", i+1);
+			plua_metatable_get_number(table, nr, &pulse);
+			buffer[i] = (int)pulse;
 		}
 	}
-	hw->running = 0;
-	return (void *)NULL;
-}
 
-void *receiveOOK(void *param) {
-	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
+	struct lua_state_t *state = plua_get_free_state();
+	int hwtype = config_hardware_get_type(state->L, hardware);
+	assert(plua_check_stack(state->L, 0) == 0);
+	plua_clear_state(state);
 
-	struct rawcode_t r;
-	r.length = 0;
-	int plslen = 0, duration = 0;
-	struct timeval tp;
-	struct timespec ts;
-
-#ifdef _WIN32
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
-#else
-	/* Make sure the pilight receiving gets
-	   the highest priority available */
-	struct sched_param sched;
-	memset(&sched, 0, sizeof(sched));
-	sched.sched_priority = 70;
-	pthread_setschedparam(pthread_self(), SCHED_FIFO, &sched);
-#endif
-
-	struct hardware_t *hw = (hardware_t *)param;
-	pthread_mutex_lock(&hw->lock);
-	hw->running = 1;
-
-	while(main_loop == 1 && hw->receiveOOK != NULL && hw->stop == 0) {
-		if(hw->wait == 0) {
-			pthread_mutex_lock(&hw->lock);
-			logprintf(LOG_STACK, "%s::unlocked", __FUNCTION__);
-			duration = hw->receiveOOK();
-			if(duration > 0) {
-				r.pulses[r.length++] = duration;
-				if(r.length > MAXPULSESTREAMLENGTH-1) {
-					r.length = 0;
-				}
-				if(duration > hw->mingaplen) {
-					if(duration < hw->maxgaplen) {
-						plslen = duration/PULSE_DIV;
-					}
-					/* Let's do a little filtering here as well */
-					if(r.length >= hw->minrawlen && r.length <= hw->maxrawlen) {
-						receive_queue(r.pulses, r.length, plslen, hw->hwtype);
-					}
-					r.length = 0;
-				}
-			/* Hardware failure */
-			} else if(duration == -1) {
-				pthread_mutex_unlock(&hw->lock);
-				gettimeofday(&tp, NULL);
-				ts.tv_sec = tp.tv_sec;
-				ts.tv_nsec = tp.tv_usec * 1000;
-				ts.tv_sec += 1;
-				pthread_mutex_lock(&hw->lock);
-				pthread_cond_timedwait(&hw->signal, &hw->lock, &ts);
-			}
-			pthread_mutex_unlock(&hw->lock);
-		} else {
-			pthread_cond_wait(&hw->signal, &hw->lock);
-		}
+	if(hwtype == -1 && hwtype != RF433 && hwtype != RFNONE && hwtype != RF868) {
+		logprintf(LOG_ERR, "hardware type not supported");
+		return NULL;
 	}
-	hw->running = 0;
+
+	int plslen = buffer[(int)length-1]/PULSE_DIV;
+	if(length > 0) {
+		receive_queue(buffer, length, plslen, hwtype);
+	}
+
 	return (void *)NULL;
 }
 
 void *clientize(void *param) {
 	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
 
+	adhoc_pending = 1;
 	struct ssdp_list_t *ssdp_list = NULL;
 	struct JsonNode *json = NULL;
 	struct JsonNode *joptions = NULL;
-	struct JsonNode *jchilds = NULL;
-	struct JsonNode *tmp = NULL;
   char *recvBuff = NULL, *output = NULL;
 	char *message = NULL, *action = NULL;
 	char *origin = NULL, *protocol = NULL;
@@ -1647,30 +2191,16 @@ void *clientize(void *param) {
 					if(strcmp(message, "config") == 0) {
 						struct JsonNode *jconfig = NULL;
 						if((jconfig = json_find_member(json, "config")) != NULL) {
+
+							pthread_mutex_lock(&config_lock);
 							gui_gc();
 							devices_gc();
 #ifdef EVENTS
 							rules_gc();
 #endif
-							registry_gc();
+							pthread_mutex_unlock(&config_lock);
 
-							int match = 1;
-							while(match) {
-								jchilds = json_first_child(jconfig);
-								match = 0;
-								while(jchilds) {
-									tmp = jchilds;
-									if(strcmp(tmp->key, "devices") != 0) {
-										json_remove_from_parent(tmp);
-										match = 1;
-									}
-									jchilds = jchilds->next;
-									if(match == 1) {
-										json_delete(tmp);
-									}
-								}
-							}
-							if(config_parse(jconfig) == EXIT_SUCCESS) {
+							if(config_parse(jconfig, CONFIG_DEVICES) == 0) {
 								logprintf(LOG_DEBUG, "loaded master configuration");
 								config_synced = 1;
 							} else {
@@ -1729,6 +2259,7 @@ void *clientize(void *param) {
 		FREE(recvBuff);
 	}
 
+	adhoc_pending = 0;
 	return NULL;
 }
 
@@ -1774,13 +2305,26 @@ static void daemonize(void) {
 }
 #endif
 
+static void close_cb(uv_handle_t *handle) {
+	FREE(handle);
+}
+
+static void walk_cb(uv_handle_t *handle, void *arg) {
+	if(!uv_is_closing(handle)) {
+		uv_close(handle, close_cb);
+	}
+}
+
 /* Garbage collector of main program */
 int main_gc(void) {
 	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
 
-	running = 0;
 	pilight.running = 0;
 	main_loop = 0;
+
+	while(adhoc_pending == 1) {
+		sleep(1);
+	}
 
 	/* If we are running in node mode, the clientize
 	   thread is waiting for a response from the main
@@ -1841,29 +2385,29 @@ int main_gc(void) {
 		}
 	}
 
-	if(pid_file_free) {
+	if(pid_file != NULL) {
 		FREE(pid_file);
 	}
 #endif
+	eventpool_gc();
 #ifdef WEBSERVER
 	if(webserver_enable == 1) {
 		webserver_gc();
 	}
-	if(webserver_root_free == 1) {
+	if(webserver_root != NULL) {
 		FREE(webserver_root);
 	}
 #endif
-
-	if(master_server != NULL) {
-		FREE(master_server);
-	}
 
 	datetime_gc();
 	ssdp_gc();
 	options_gc();
 	socket_gc();
 
+	pthread_mutex_lock(&config_lock);
 	config_gc();
+	pthread_mutex_unlock(&config_lock);
+
 	protocol_gc();
 	ntp_gc();
 	whitelist_free();
@@ -1873,10 +2417,11 @@ int main_gc(void) {
 #endif
 	dso_gc();
 	log_gc();
-	if(configtmp != NULL) {
-		FREE(configtmp);
-	}
+	ssl_gc();
+	plua_gc();
 
+	uv_stop(uv_default_loop());
+	options_delete(options);
 	gc_clear();
 	FREE(progname);
 	xfree();
@@ -1887,6 +2432,10 @@ int main_gc(void) {
 		FreeConsole();
 	}
 #endif
+
+	FREE(signal_req);
+
+	running = 0;
 
 	return 0;
 }
@@ -1902,8 +2451,8 @@ static void procProtocolInit(void) {
 	procProtocol->multipleId = 0;
 	procProtocol->config = 0;
 
-	options_add(&procProtocol->options, 'c', "cpu", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
-	options_add(&procProtocol->options, 'r', "ram", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
+	options_add(&procProtocol->options, "c", "cpu", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
+	options_add(&procProtocol->options, "r", "ram", OPTION_HAS_VALUE, DEVICES_VALUE, JSON_NUMBER, NULL, NULL);
 }
 
 #ifndef _WIN32
@@ -1913,8 +2462,13 @@ static void procProtocolInit(void) {
 void registerVersion(void) {
 	logprintf(LOG_STACK, "%s(...)", __FUNCTION__);
 
-	registry_remove_value("pilight.version");
-	registry_set_string("pilight.version.current", (char *)PILIGHT_VERSION);
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		config_registry_set_null(state->L, "pilight.version");
+		config_registry_set_string(state->L, "pilight.version.current", (char *)PILIGHT_VERSION);
+		assert(plua_check_stack(state->L, 0) == 0);
+		plua_clear_state(state);
+	}
 }
 #ifndef _WIN32
 #pragma GCC diagnostic pop   // require GCC 4.6
@@ -1959,129 +2513,104 @@ void openconsole(void) {
 }
 #endif
 
-void *pilight_stats(void *param) {
-	int checkram = 0, checkcpu = 0, i = -1, x = 0, watchdog = 1, stats = 1;
-	settings_find_number("watchdog-enable", &watchdog);
-	settings_find_number("stats-enable", &stats);
+static void pilight_abort(uv_timer_t *timer_req) {
+	exit(EXIT_FAILURE);
+}
 
-	while(main_loop) {
-		if(pilight.runmode == STANDALONE) {
-			registerVersion();
-		}
-
-		if(stats == 1) {
-			double cpu = 0.0, ram = 0.0;
-			cpu = getCPUUsage();
-			ram = getRAMUsage();
-
-			if(threadprofiler == 1) {
-				threads_cpu_usage(1);
-			}
-			if(watchdog == 1 && (i > -1) && (cpu > 60)) {
-				if(nodaemon == 1 && threadprofiler == 0) {
-					threads_cpu_usage(x);
-					x ^= 1;
-				}
-				if(checkcpu == 0) {
-					if(cpu > 90) {
-						logprintf(LOG_CRIT, "cpu usage way too high %f%%", cpu);
-					} else {
-						logprintf(LOG_WARNING, "cpu usage too high %f%%", cpu);
-					}
-					logprintf(LOG_WARNING, "checking again in 10 seconds");
-					sleep(10);
-				} else {
-					if(cpu > 90) {
-						logprintf(LOG_ALERT, "cpu usage still way too high %f%%, exiting", cpu);
-					} else {
-						logprintf(LOG_CRIT, "cpu usage still too high %f%%, stopping", cpu);
-					}
-				}
-				if(checkcpu == 1) {
-					if(cpu > 90) {
-						exit(EXIT_FAILURE);
-					} else {
-						main_gc();
-						break;
-					}
-				}
-				checkcpu = 1;
-			} else if(watchdog == 1 && (i > -1) && (ram > 60)) {
-				if(checkram == 0) {
-					if(ram > 90) {
-						logprintf(LOG_CRIT, "ram usage way too high %f%%", ram);
-						exit(EXIT_FAILURE);
-					} else {
-						logprintf(LOG_WARNING, "ram usage too high %f%%", ram);
-					}
-					logprintf(LOG_WARNING, "checking again in 10 seconds");
-					sleep(10);
-				} else {
-					if(ram > 90) {
-						logprintf(LOG_ALERT, "ram usage still way too high %f%%, exiting", ram);
-					} else {
-						logprintf(LOG_CRIT, "ram usage still too high %f%%, stopping", ram);
-					}
-				}
-				if(checkram == 1) {
-					if(ram > 90) {
-						exit(EXIT_FAILURE);
-					} else {
-						main_gc();
-						break;
-					}
-				}
-				checkram = 1;
-			} else {
-				checkcpu = 0;
-				checkram = 0;
-				if((i > 0 && i%3 == 0) || (i == -1)) {
-					procProtocol->message = json_mkobject();
-					struct JsonNode *code = json_mkobject();
-					json_append_member(code, "cpu", json_mknumber(cpu, 16));
-					if(ram > 0) {
-						json_append_member(code, "ram", json_mknumber(ram, 16));
-					}
-					logprintf(LOG_DEBUG, "cpu: %f%%, ram: %f%%", cpu, ram);
-					json_append_member(procProtocol->message, "values", code);
-					json_append_member(procProtocol->message, "origin", json_mkstring("core"));
-					json_append_member(procProtocol->message, "type", json_mknumber(PROCESS, 0));
-					struct clients_t *tmp_clients = clients;
-					while(tmp_clients) {
-						if(tmp_clients->cpu > 0 && tmp_clients->ram > 0) {
-							logprintf(LOG_DEBUG, "- client: %s cpu: %f%%, ram: %f%%",
-										tmp_clients->uuid, tmp_clients->cpu, tmp_clients->ram);
-						}
-						tmp_clients = tmp_clients->next;
-					}
-					pilight.broadcast(procProtocol->id, procProtocol->message, STATS);
-					json_delete(procProtocol->message);
-					procProtocol->message = NULL;
-
-					i = 0;
-					x = 0;
-				}
-				i++;
-			}
-		}
-		sleep(1);
+static void pilight_stats(uv_timer_t *timer_req) {
+	int watchdog = 1, stats = 1;
+	// double itmp = 0.0;
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		config_setting_get_number(state->L, "watchdog-enable", 0, &watchdog);
+		config_setting_get_number(state->L, "stats-enable", 0, &stats);
+		assert(plua_check_stack(state->L, 0) == 0);
+		plua_clear_state(state);
 	}
-	return (void *)NULL;
+
+	if(pilight.runmode == STANDALONE) {
+		registerVersion();
+	}
+
+	if(stats == 1) {
+		double cpu = 0.0;
+		cpu = getCPUUsage();
+		if(watchdog == 1 && (cpu > 90)) {
+			logprintf(LOG_CRIT, "cpu usage too high %f%%, will abort when this persists", cpu);
+		} else {
+			if(watchdog == 1 && stats == 1 && timer_abort_req != NULL) {
+				uv_timer_stop(timer_abort_req);
+				uv_timer_start(timer_abort_req, pilight_abort, 9000, -1);
+			}
+
+			procProtocol->message = json_mkobject();
+			struct JsonNode *code = json_mkobject();
+			json_append_member(code, "cpu", json_mknumber(cpu, 16));
+			logprintf(LOG_DEBUG, "cpu: %f%%", cpu);
+			json_append_member(procProtocol->message, "values", code);
+			json_append_member(procProtocol->message, "origin", json_mkstring("core"));
+			json_append_member(procProtocol->message, "type", json_mknumber(PROCESS, 0));
+			struct clients_t *tmp_clients = clients;
+			while(tmp_clients) {
+				if(tmp_clients->cpu > 0 && tmp_clients->ram > 0) {
+					logprintf(LOG_DEBUG, "- client: %s cpu: %f%%",
+								tmp_clients->uuid, tmp_clients->cpu);
+				}
+				tmp_clients = tmp_clients->next;
+			}
+			pilight.broadcast(procProtocol->id, procProtocol->message, STATS);
+			json_delete(procProtocol->message);
+			procProtocol->message = NULL;
+		}
+	}
+	return;
+}
+
+static void generate_uuid(uv_timer_t *timer_req) {
+	int nrdevs = 0, x = 0;
+	char **devs = NULL, *p = NULL;
+	if((nrdevs = inetdevs(&devs)) > 0) {
+		for(x=0;x<nrdevs;x++) {
+			if((p = genuuid(devs[x])) == NULL) {
+				logprintf(LOG_ERR, "could not generate the device uuid");
+				uv_timer_start(timer_req, generate_uuid, 3000, 0);
+			} else {
+				strcpy(pilight_uuid, p);
+				FREE(p);
+				break;
+			}
+		}
+	}
+	array_free(&devs, nrdevs);
+}
+
+static void signal_cb(uv_signal_t *handle, int signum) {
+	logprintf(LOG_INFO, "Interrupt signal received. Please wait while pilight is shutting down");
+
+	if(config_get_file() != NULL) {
+		if(pilight.runmode == STANDALONE) {
+			config_write(CONFIG_USER, "all");
+		}
+	}
+
+	main_gc();	
+	uv_stop(uv_default_loop());
+	FREE(signal_req);
 }
 
 int start_pilight(int argc, char **argv) {
-	struct options_t *options = NULL;
+	const uv_thread_t pth_cur_id = uv_thread_self();
+	memcpy((void *)&pth_main_id, &pth_cur_id, sizeof(uv_thread_t));
+
 	struct ssdp_list_t *ssdp_list = NULL;
 
 	char buffer[BUFFER_SIZE];
-	int itmp = 0, show_default = 0, show_version = 0, show_help = 0;
+	int verbosity_changed = 0, show_default = 0, show_version = 0, show_help = 0;
 #ifndef _WIN32
 	int f = 0;
 #endif
-	char *stmp = NULL, *args = NULL, *p = NULL;
+	char *stmp = NULL, *p = NULL;
 	int port = 0;
-
-	wiringXLog = logprintf;
 
 	if((progname = MALLOC(16)) == NULL) {
 		fprintf(stderr, "out of memory\n");
@@ -2089,78 +2618,101 @@ int start_pilight(int argc, char **argv) {
 	}
 	strcpy(progname, "pilight-daemon");
 
-	if((configtmp = MALLOC(strlen(CONFIG_FILE)+1)) == NULL) {
-		fprintf(stderr, "out of memory\n");
-		exit(EXIT_FAILURE);
-	}
-	strcpy(configtmp, CONFIG_FILE);
+	{
+		int nr = sizeof(signals)/sizeof(signals[0]), i = 0;
+		if((signal_req = MALLOC(sizeof(uv_signal_t *)*nr)) == NULL) {
+			OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+		}
+		for(i=0;i<nr;i++) {
+			if((signal_req[i] = MALLOC(sizeof(uv_signal_t))) == NULL) {
+				OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+			}
 
-	options_add(&options, 'H', "help", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'V', "version", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'D', "nodaemon", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'C', "config", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 'S', "server", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$");
-	options_add(&options, 'P', "port", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "[0-9]{1,4}");
-	options_add(&options, 256, "stacktracer", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 257, "threadprofiler", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
-	options_add(&options, 258, "debuglevel", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "[01]{1}");
+			uv_signal_init(uv_default_loop(), signal_req[i]);
+			uv_signal_start(signal_req[i], signal_cb, signals[i]);
+		}
+	}
+
+	configtmp = CONFIG_FILE;
+
+	options_add(&options, "H", "help", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "V", "version", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "F", "foreground", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "C", "config", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "S", "server", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]).){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$");
+	options_add(&options, "P", "port", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "[0-9]{1,4}");
+	options_add(&options, "Ls", "storage-root", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "Ll", "lua-root", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "D", "debug", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "256", "stacktracer", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "257", "threadprofiler", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
+	options_add(&options, "258", "debuglevel", OPTION_HAS_VALUE, 0, JSON_NULL, NULL, "[0-2]{1}");
 	// options_add(&options, 258, "memory-tracer", OPTION_NO_VALUE, 0, JSON_NULL, NULL, NULL);
 
-	while(1) {
-		int c = options_parse(&options, argc, argv, 1, &args);
-		if(c == -1) {
-			break;
-		}
-		if(c == -2) {
-			show_help = 1;
-			break;
-		}
-		switch(c) {
-			case 'H':
-				show_help = 1;
-			break;
-			case 'V':
-				show_version = 1;
-			break;
-			case 'C':
-				configtmp = REALLOC(configtmp, strlen(args)+1);
-				strcpy(configtmp, args);
-			break;
-			case 'S':
-				if((master_server = MALLOC(strlen(args)+1)) == NULL) {
-					fprintf(stderr, "out of memory\n");
-					exit(EXIT_FAILURE);
-				}
-				strcpy(master_server, args);
-			break;
-			case 'P':
-				master_port = (unsigned short)atoi(args);
-			break;
-			case 'D':
-				nodaemon = 1;
-				verbosity = LOG_DEBUG;
-			break;
-			case 257:
-				threadprofiler = 1;
-				verbosity = LOG_ERR;
-				nodaemon = 1;
-			break;
-			case 256:
-				verbosity = LOG_STACK;
-				stacktracer = 1;
-				nodaemon = 1;
-			break;
-			case 258:
-				pilight.debuglevel = atoi(args);
-				nodaemon = 1;
-				verbosity = LOG_DEBUG;
-			break;
-			default:
-				show_default = 1;
-			break;
+	if(options_parse(options, argc, argv, 1) == -1) {
+		show_default = 1;
+	} else if(options_exists(options, "H") == 0) {
+		show_help = 1;
+	} else if(options_exists(options, "V") == 0) {
+		show_version = 1;
+	}
+
+	if(options_exists(options, "C") == 0) {
+		options_get_string(options, "C", &configtmp);
+	}
+
+	if(options_exists(options, "S") == 0) {
+		options_get_string(options, "S", &master_server);
+	}
+
+	if(options_exists(options, "P") == 0) {
+		options_get_number(options, "P", &master_port);
+	}
+
+	if(options_exists(options, "D") == 0) {
+		nodaemon = 1;
+		verbosity = LOG_DEBUG;
+		verbosity_changed = 1;
+	}
+
+	if(options_exists(options, "Ls") == 0) {
+		char *arg = NULL;
+		options_get_string(options, "Ls", &arg);
+		if(config_root(arg) == -1) {
+			logprintf(LOG_ERR, "%s is not valid storage lua modules path", arg);
+			goto clear;
 		}
 	}
-	options_delete(options);
+
+	if(options_exists(options, "Ll") == 0) {
+		options_get_string(options, "Ll", &lua_root);
+	}
+
+	if(options_exists(options, "F") == 0) {
+		nodaemon = 1;
+	}
+
+	if(options_exists(options, "257") == 0) {
+		threadprofiler = 1;
+		verbosity = LOG_ERR;
+		verbosity_changed = 1;
+		nodaemon = 1;
+	}
+
+	if(options_exists(options, "256") == 0) {
+		verbosity = LOG_STACK;
+		verbosity_changed = 1;
+		stacktracer = 1;
+		nodaemon = 1;
+	}
+
+	if(options_exists(options, "258") == 0) {
+		options_get_number(options, "258", &pilight.debuglevel);
+		nodaemon = 1;
+		verbosity = LOG_DEBUG;
+		verbosity_changed = 1;
+	}
+
 	if(show_help == 1) {
 		char help[1024];
 		char tabs[5];
@@ -2170,21 +2722,42 @@ int start_pilight(int argc, char **argv) {
 		strcpy(tabs, "\t\t");
 #endif
 		sprintf(help, "Usage: %s [options]\n"
-									"\t -H --help\t\t\tdisplay usage summary\n"
-									"\t -V --version\t%sdisplay version\n"
-									"\t -C --config\t%sconfig file\n"
-									"\t -S --server=x.x.x.x\t\tconnect to server address\n"
-									"\t -P --port=xxxx\t%sconnect to server port\n"
-									"\t -D --nodaemon\t%sdo not daemonize and\n"
+									"\t -H  --help\t\t\tdisplay usage summary\n"
+									"\t -V  --version\t%sdisplay version\n"
+									"\n"
+									"\t -C  --config\t%sconfig file\n"
+									"\n"
+									"\t -S  --server=x.x.x.x\t\tconnect to server address\n"
+									"\t -P  --port=xxxx%sconnect to server port\n"
+									"\n"
+									"\t -F  --foreground\t\tdo not daemonize\n"
+									"\t -D  --debug\t%sdo not daemonize and\n"
 									"\t\t\t%sshow debug information\n"
-									"\t    --stacktracer\t\tshow internal function calls\n"
-									"\t    --threadprofiler\t\tshow per thread cpu usage\n"
-									"\t    --debuglevel\t\tshow additional development info\n",
+									"\n"
+									"\t -Ls --storage-root=xxxx\tlocation of the storage lua modules\n"
+									"\t -Ll --lua-root=xxxx\t\tlocation of the plain lua modules\n"
+									"\n"
+									/*"\t     --stacktracer\t\tshow internal function calls\n"
+									"\t     --threadprofiler\t\tshow per thread cpu usage\n"
+									"\t     --debuglevel\t\tshow additional development info\n"*/,
 									progname, tabs, tabs, tabs, tabs, tabs);
 #ifdef _WIN32
 		MessageBox(NULL, help, "pilight :: info", MB_OK);
 #else
 		printf("%s", help);
+#if defined(__arm__) || defined(__mips__) || defined(__aarch64__)
+		printf("\n\tThe following GPIO platforms are supported:\n");
+		char **out = NULL;
+		int z = 0, i = wiringXSupportedPlatforms(&out);
+
+		printf("\t- none\n");
+		for(z=0;z<i;z++) {
+			printf("\t- %s\n", out[z]);
+			free(out[z]);
+		}
+		free(out);
+		printf("\n");
+#endif
 #endif
 		goto clear;
 	}
@@ -2238,63 +2811,86 @@ int start_pilight(int argc, char **argv) {
 	}
 #endif
 
-	/* Run main garbage collector when quiting the daemon */
-	gc_attach(main_gc);
+	// /* Run main garbage collector when quiting the daemon */
+	// gc_attach(main_gc);
 
-	/* Catch all exit signals for gc */
-	gc_catch();
+	// /* Catch all exit signals for gc */
+	// gc_catch();
 
-	int nrdevs = 0, x = 0;
-	char **devs = NULL;
-	if((nrdevs = inetdevs(&devs)) > 0) {
-		for(x=0;x<nrdevs;x++) {
-			if((p = genuuid(devs[x])) == NULL) {
-				logprintf(LOG_ERR, "could not generate the device uuid");
-			} else {
-				strcpy(pilight_uuid, p);
-				FREE(p);
-				break;
-			}
-		}
+	uv_timer_t *timer_uuid_req = MALLOC(sizeof(uv_timer_t));
+	if(timer_uuid_req == NULL) {
+		OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
 	}
-	array_free(&devs, nrdevs);
+	uv_timer_init(uv_default_loop(), timer_uuid_req);
+	generate_uuid(timer_uuid_req);
 
 	firmware.version = 0;
 	firmware.lpf = 0;
 	firmware.hpf = 0;
 
-	log_level_set(LOG_INFO);
 	log_file_enable();
 	log_shell_disable();
 
 	memset(buffer, '\0', BUFFER_SIZE);
 
 	if(nodaemon == 1) {
-		log_level_set(verbosity);
 		log_shell_enable();
 	}
 
-#ifdef _WIN32
-	if((pid = check_instances(L"pilight-daemon")) != -1) {
-		logprintf(LOG_NOTICE, "pilight is already running");
+	int *ret = NULL, n = 0;
+	if((n = isrunning("pilight-daemon", &ret)) > 1) {
+		int i = 0;
+		for(i=0;i<n;i++) {
+			if(ret[i] != getpid()) {
+				log_shell_enable();
+				logprintf(LOG_NOTICE, "pilight-daemon is already running (%d)", ret[i]);
+				break;
+			}
+		}
+		FREE(ret);
+		goto clear;
+	} else if(n == 1) {
+		FREE(ret);
+	}
+
+	if((n = isrunning("pilight-debug", &ret)) > 0) {
+		logprintf(LOG_NOTICE, "pilight-debug instance found (%d)", ret[0]);
+		FREE(ret);
 		goto clear;
 	}
-#endif
 
-	if((pid = isrunning("pilight-raw")) != -1) {
-		logprintf(LOG_NOTICE, "pilight-raw instance found (%d)", (int)pid);
+	if((n = isrunning("pilight-raw", &ret)) > 0) {
+		logprintf(LOG_NOTICE, "pilight-raw instance found (%d)", ret[0]);
+		FREE(ret);
 		goto clear;
 	}
 
-	if((pid = isrunning("pilight-debug")) != -1) {
-		logprintf(LOG_NOTICE, "pilight-debug instance found (%d)", (int)pid);
-		goto clear;
+	{
+		int len = strlen(lua_root)+strlen("lua/?/?.lua")+1;
+		char *lua_path = MALLOC(len);
+
+		if(lua_path == NULL) {
+			OUT_OF_MEMORY
+		}
+
+		plua_init();
+
+		memset(lua_path, '\0', len);
+		snprintf(lua_path, len, "%s/?/?.lua", lua_root);
+		plua_package_path(lua_path);
+
+		memset(lua_path, '\0', len);
+		snprintf(lua_path, len, "%s/?.lua", lua_root);
+		plua_package_path(lua_path);
+
+		FREE(lua_path);
 	}
 
 	if(config_set_file(configtmp) == EXIT_FAILURE) {
 		return EXIT_FAILURE;
 	}
 
+	eventpool_init(EVENTPOOL_THREADED);
 	protocol_init();
 	config_init();
 
@@ -2304,109 +2900,183 @@ int start_pilight(int argc, char **argv) {
 	pilight.control = &control_device;
 	pilight.receive = &receive_parse_api;
 
-	if(config_read() != EXIT_SUCCESS) {
-		goto clear;
+	/* Rewrite */
+	eventpool_callback(REASON_CONTROL_DEVICE, control_device1, NULL);
+	eventpool_callback(REASON_SOCKET_RECEIVED, socket_parse_data1, NULL);
+	eventpool_callback(REASON_RECEIVED_PULSETRAIN+10000, receivePulseTrain1, NULL);
+	eventpool_callback(REASON_RECEIVED_OOK+10000, receivePulseTrain1, NULL);
+	eventpool_callback(REASON_RECEIVED_API+10000, receiveAPI1, NULL);
+
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		if(config_read(state->L, CONFIG_SETTINGS | CONFIG_REGISTRY | CONFIG_DEVICES | CONFIG_RULES | CONFIG_GUI) != EXIT_SUCCESS) {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+			logprintf(LOG_ERR, "failed to read config");
+			goto clear;
+		} else {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+		}
+	}
+
+	hardware_init();
+
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		if(config_read(state->L, CONFIG_HARDWARE) != EXIT_SUCCESS) {
+			logprintf(LOG_ERR, "failed to read config");
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+			goto clear;
+		} else {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+		}
 	}
 
 	registerVersion();
 
-#ifdef WEBSERVER
-	#ifdef WEBSERVER_HTTPS
-	char *pemfile = NULL;
-	int pem_free = 0;
-	if(settings_find_string("pem-file", &pemfile) != 0) {
-		if((pemfile = REALLOC(pemfile, strlen(PEM_FILE)+1)) == NULL) {
-			fprintf(stderr, "out of memory\n");
-			exit(EXIT_FAILURE);
+	// let verbosity level from command line take precedence over config file
+	if(verbosity_changed == 0) {
+		struct lua_state_t *state = plua_get_free_state();
+		config_setting_get_number(state->L, "log-level", 0, &verbosity);
+		assert(plua_check_stack(state->L, 0) == 0);
+		plua_clear_state(state);
+	}
+
+	log_level_set(verbosity);
+
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		if(config_setting_get_string(state->L, "log-file", 0, &stmp) == 0) {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+			if(log_file_set(stmp) == EXIT_FAILURE) {
+				FREE(stmp);
+				goto clear;
+			}
+			FREE(stmp);
+		} else {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
 		}
-		strcpy(pemfile, PEM_FILE);
-		pem_free = 1;
-	}	
-	
-	char *content = NULL;
-	unsigned char md5sum[17];
-	char md5conv[33];
-	int i = 0;
-	p = (char *)md5sum;
-	if(file_exists(pemfile) != 0) {
-		logprintf(LOG_ERR, "missing webserver SSL private key %s", pemfile);
-		if(pem_free == 1) {
+	}
+
+#ifdef WEBSERVER
+#ifdef WEBSERVER_HTTPS
+	char *pemfile = NULL;
+
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		if(config_setting_get_string(state->L, "pem-file", 0, &pemfile) != 0) {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+			if((pemfile = REALLOC(pemfile, strlen(PEM_FILE)+1)) == NULL) {
+				fprintf(stderr, "out of memory\n");
+				exit(EXIT_FAILURE);
+			}
+			strcpy(pemfile, PEM_FILE);
+		}	else {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+		}
+
+		char *content = NULL;
+		unsigned char md5sum[17];
+		char md5conv[33];
+		int i = 0;
+		p = (char *)md5sum;
+		if(file_exists(pemfile) != 0) {
+			logprintf(LOG_ERR, "missing webserver SSL private key %s", pemfile);
+			if(pemfile != NULL) {
+				FREE(pemfile);
+			}
+			goto clear;
+		}
+		if(file_get_contents(pemfile, &content) == 0) {
+			mbedtls_md5((const unsigned char *)content, strlen((char *)content), (unsigned char *)p);
+			for(i = 0; i < 32; i+=2) {
+				sprintf(&md5conv[i], "%02x", md5sum[i/2] );
+			}
+
+			struct lua_state_t *state = plua_get_free_state();
+			if(strcmp(md5conv, PILIGHT_PEM_MD5) == 0) {
+				config_registry_set_number(state->L, "webserver.ssl.certificate.secure", 0);
+			} else {
+				config_registry_set_number(state->L, "webserver.ssl.certificate.secure", 1);
+			}
+			config_registry_set_string(state->L, "webserver.ssl.certificate.location", pemfile);
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+
+			FREE(content);
+		}
+
+		if(pemfile != NULL) {
 			FREE(pemfile);
 		}
-		goto clear;
 	}
-	if(file_get_contents(pemfile, &content) == 0) {
-		md5((const unsigned char *)content, strlen((char *)content), (unsigned char *)p);
-		for(i = 0; i < 32; i+=2) {
-			sprintf(&md5conv[i], "%02x", md5sum[i/2] );
-		}
-		if(strcmp(md5conv, PILIGHT_PEM_MD5) == 0) {
-			registry_set_number("webserver.ssl.certificate.secure", 0, 0);
+#endif
+
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		config_setting_get_number(state->L, "webserver-enable", 0, &webserver_enable);
+		config_setting_get_number(state->L, "webserver-http-port", 0, &webserver_http_port);
+		if(config_setting_get_string(state->L, "webserver-root", 0, &webserver_root) != 0) {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+			if((webserver_root = REALLOC(webserver_root, strlen(WEBSERVER_ROOT)+1)) == NULL) {
+				fprintf(stderr, "out of memory\n");
+				exit(EXIT_FAILURE);
+			}
+			strcpy(webserver_root, WEBSERVER_ROOT);
 		} else {
-			registry_set_number("webserver.ssl.certificate.secure", 1, 0);
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
 		}
-		registry_set_string("webserver.ssl.certificate.location", pemfile);
-		FREE(content);
-	}
-
-	if(pem_free == 1) {
-		FREE(pemfile);
-	}	
-	#endif
-
-	settings_find_number("webserver-enable", &webserver_enable);
-	settings_find_number("webserver-http-port", &webserver_http_port);
-	if(settings_find_string("webserver-root", &webserver_root) != 0) {
-		if((webserver_root = REALLOC(webserver_root, strlen(WEBSERVER_ROOT)+1)) == NULL) {
-			fprintf(stderr, "out of memory\n");
-			exit(EXIT_FAILURE);
-		}
-		strcpy(webserver_root, WEBSERVER_ROOT);
-		webserver_root_free = 1;
 	}
 #endif
 
 #ifndef _WIN32
-	if(settings_find_string("pid-file", &pid_file) != 0) {
-		if((pid_file = REALLOC(pid_file, strlen(PID_FILE)+1)) == NULL) {
-			fprintf(stderr, "out of memory\n");
-			exit(EXIT_FAILURE);
-		}
-		strcpy(pid_file, PID_FILE);
-		pid_file_free = 1;
-	}
 
-	if((f = open(pid_file, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR)) != -1) {
-		if(read(f, buffer, BUFFER_SIZE) != -1) {
-			//If the file is empty, create a new process
-			strcat(buffer, "\0");
-			if(!atoi(buffer)) {
-				running = 0;
-			} else {
-				//Check if the process is running
-				kill(atoi(buffer), 0);
-				//If not, create a new process
-				if(errno == ESRCH) {
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		if(config_setting_get_string(state->L, "pid-file", 0, &pid_file) != 0) {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+			if((pid_file = REALLOC(pid_file, strlen(PID_FILE)+1)) == NULL) {
+				fprintf(stderr, "out of memory\n");
+				exit(EXIT_FAILURE);
+			}
+			strcpy(pid_file, PID_FILE);
+		} else {
+			assert(plua_check_stack(state->L, 0) == 0);
+			plua_clear_state(state);
+		}
+
+		if((f = open(pid_file, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR)) != -1) {
+			if(read(f, buffer, BUFFER_SIZE) != -1) {
+				//If the file is empty, create a new process
+				strcat(buffer, "\0");
+				if(!atoi(buffer)) {
 					running = 0;
+				} else {
+					//Check if the process is running
+					kill(atoi(buffer), 0);
+					//If not, create a new process
+					if(errno == ESRCH) {
+						running = 0;
+					}
 				}
 			}
-		}
-	} else {
-		logprintf(LOG_ERR, "could not open / create pid_file %s", pid_file);
-		goto clear;
-	}
-	close(f);
-#endif
-
-	if(settings_find_number("log-level", &itmp) == 0) {
-		log_level_set(itmp);
-	}
-
-	if(settings_find_string("log-file", &stmp) == 0) {
-		if(log_file_set(stmp) == EXIT_FAILURE) {
+		} else {
+			logprintf(LOG_ERR, "could not open / create pid_file %s", pid_file);
 			goto clear;
 		}
+		close(f);
 	}
+#endif
 
 #ifdef HASH
 	logprintf(LOG_INFO, "version %s", HASH);
@@ -2417,12 +3087,6 @@ int start_pilight(int argc, char **argv) {
 	if(nodaemon == 1 || running == 1) {
 		log_file_disable();
 		log_shell_enable();
-
-		if(nodaemon == 1) {
-			log_level_set(verbosity);
-		} else {
-			log_level_set(LOG_ERR);
-		}
 	}
 
 #ifndef _WIN32
@@ -2435,39 +3099,44 @@ int start_pilight(int argc, char **argv) {
 	}
 #endif
 
-	struct conf_hardware_t *tmp_confhw = conf_hardware;
-	while(tmp_confhw) {
-		if(tmp_confhw->hardware->init) {
-			if(tmp_confhw->hardware->comtype == COMOOK) {
-				struct protocols_t *tmp = protocols;
-				while(tmp) {
-					if(tmp->listener->hwtype == tmp_confhw->hardware->hwtype) {
-						if(tmp->listener->maxrawlen > tmp_confhw->hardware->maxrawlen) {
-							tmp_confhw->hardware->maxrawlen = tmp->listener->maxrawlen;
-						}
-						if(tmp->listener->minrawlen > 0 && tmp->listener->minrawlen < tmp_confhw->hardware->minrawlen) {
-							tmp_confhw->hardware->minrawlen = tmp->listener->minrawlen;
-						}
-						if(tmp->listener->maxgaplen > tmp_confhw->hardware->maxgaplen) {
-							tmp_confhw->hardware->maxgaplen = tmp->listener->maxgaplen;
-						}
-						if(tmp->listener->mingaplen > 0 && tmp->listener->mingaplen < tmp_confhw->hardware->mingaplen) {
-							tmp_confhw->hardware->mingaplen = tmp->listener->mingaplen;
-						}
-						if(tmp->listener->rawlen > 0) {
-							logprintf(LOG_EMERG, "%s: setting \"rawlen\" length is not allowed, use the \"minrawlen\" and \"maxrawlen\" instead", tmp->listener->id);
-							goto clear;
-						}
-					}
-					tmp = tmp->next;
-				}
+	{
+		int mingaplen = 5100, maxgaplen = 10000, minrawlen = 1000, maxrawlen = 0;
+
+		struct protocols_t *tmp = protocols;
+		while(tmp) {
+			if(tmp->listener->maxrawlen > maxrawlen) {
+				maxrawlen = tmp->listener->maxrawlen;
 			}
+			if(tmp->listener->minrawlen > 0 && tmp->listener->minrawlen < minrawlen) {
+				minrawlen = tmp->listener->minrawlen;
+			}
+			if(tmp->listener->maxgaplen > maxgaplen) {
+				maxgaplen = tmp->listener->maxgaplen;
+			}
+			if(tmp->listener->mingaplen > 0 && tmp->listener->mingaplen < mingaplen) {
+				mingaplen = tmp->listener->mingaplen;
+			}
+			if(tmp->listener->rawlen > 0) {
+				logprintf(LOG_EMERG, "%s: setting \"rawlen\" length is not allowed, use the \"minrawlen\" and \"maxrawlen\" instead", tmp->listener->id);
+				goto clear;
+			}
+			tmp = tmp->next;
 		}
-		tmp_confhw = tmp_confhw->next;
+
+		struct plua_metatable_t *table = config_get_metatable();
+		plua_metatable_set_number(table, "registry.hardware.RF433.mingaplen", mingaplen);
+		plua_metatable_set_number(table, "registry.hardware.RF433.maxgaplen", maxgaplen);
+		plua_metatable_set_number(table, "registry.hardware.RF433.minrawlen", minrawlen);
+		plua_metatable_set_number(table, "registry.hardware.RF433.maxrawlen", maxrawlen);
 	}
 
-	settings_find_number("port", &port);
-	settings_find_number("standalone", &standalone);
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		config_setting_get_number(state->L, "port", 0, &port);
+		config_setting_get_number(state->L, "standalone", 0, &standalone);
+		assert(plua_check_stack(state->L, 0) == 0);
+		plua_clear_state(state);
+	}
 
 	pilight.runmode = STANDALONE;
 	if(standalone == 0 || (master_server != NULL && master_port > 0)) {
@@ -2489,6 +3158,7 @@ int start_pilight(int argc, char **argv) {
 		}
 	}
 
+	ssl_init();
 	if(pilight.runmode == STANDALONE) {
 		socket_start((unsigned short)port);
 		if(standalone == 0) {
@@ -2517,6 +3187,10 @@ int start_pilight(int argc, char **argv) {
 	pthread_mutex_init(&sendqueue_lock, &sendqueue_attr);
 	pthread_cond_init(&sendqueue_signal, NULL);
 	sendqueue_init = 1;
+
+	pthread_mutexattr_init(&config_attr);
+	pthread_mutexattr_settype(&config_attr, PTHREAD_MUTEX_RECURSIVE);
+	pthread_mutex_init(&config_lock, &config_attr);
 
 	pthread_mutexattr_init(&recvqueue_attr);
 	pthread_mutexattr_settype(&recvqueue_attr, PTHREAD_MUTEX_RECURSIVE);
@@ -2552,38 +3226,8 @@ int start_pilight(int argc, char **argv) {
 	threads_register("sender", &send_code, (void *)NULL, 0);
 	threads_register("broadcaster", &broadcast, (void *)NULL, 0);
 
-	tmp_confhw = conf_hardware;
-	while(tmp_confhw && main_loop) {
-		if(tmp_confhw->hardware->init) {
-			if(tmp_confhw->hardware->init() == EXIT_FAILURE) {
-				if(main_loop == 1) {
-					logprintf(LOG_ERR, "could not initialize %s hardware module", tmp_confhw->hardware->id);
-					goto clear;
-				} else {
-					break;
-				}
-			}
-			if(main_loop == 1) {
-				tmp_confhw->hardware->wait = 0;
-				tmp_confhw->hardware->stop = 0;
-				if(tmp_confhw->hardware->comtype == COMOOK) {
-					threads_register(tmp_confhw->hardware->id, &receiveOOK, (void *)tmp_confhw->hardware, 0);
-				} else if(tmp_confhw->hardware->comtype == COMPLSTRAIN) {
-					threads_register(tmp_confhw->hardware->id, &receivePulseTrain, (void *)tmp_confhw->hardware, 0);
-				} else if(tmp_confhw->hardware->comtype == COMAPI) {
-					threads_register(tmp_confhw->hardware->id, tmp_confhw->hardware->receiveAPI, (void *)tmp_confhw->hardware, 0);
-				}
-			} else {
-				break;
-			}
-		}
-		if(main_loop == 0) {
-			break;
-		}
-		tmp_confhw = tmp_confhw->next;
-	}
-	if(main_loop == 0) {
-		goto clear;
+	if(config_hardware_run() == -1) {
+		logprintf(LOG_NOTICE, "there are no hardware modules configured");
 	}
 
 	threads_register("receive parser", &receive_parse_code, (void *)NULL, 0);
@@ -2597,30 +3241,59 @@ int start_pilight(int argc, char **argv) {
 #endif
 
 #ifdef WEBSERVER
-	settings_find_number("webgui-websockets", &webgui_websockets);
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		config_setting_get_number(state->L, "webgui-websockets", 0, &webgui_websockets);
 
-	/* Register a seperate thread for the webserver */
-	if(webserver_enable == 1 && pilight.runmode == STANDALONE) {
-		webserver_start();
-		/* Register a seperate thread in which the webserver communicates the main daemon */
-		threads_register("webserver client", &webserver_clientize, (void *)NULL, 0);
-		if(webgui_websockets == 1) {
-			threads_register("webserver broadcast", &webserver_broadcast, (void *)NULL, 0);
+		/* Register a seperate thread for the webserver */
+		if(webserver_enable == 1 && pilight.runmode == STANDALONE) {
+			/* Register a seperate thread in which the webserver communicates the main daemon */
+#ifdef PILIGHT_DEVELOPMENT
+			if(webgui_websockets == 1) {
+				threads_register("webserver broadcast", &webserver_broadcast, (void *)NULL, 0);
+			}
+#endif
+		} else {
+			webserver_enable = 0;
 		}
-	} else {
-		webserver_enable = 0;
+#ifndef PILIGHT_DEVELOPMENT
+		if(webserver_enable == 1) {
+			webserver_start();
+		}
+#endif
+		assert(plua_check_stack(state->L, 0) == 0);
+		plua_clear_state(state);
 	}
 #endif
 
-	char *ntpsync = NULL;
-	if(settings_find_string("ntpserver0", &ntpsync) == 0) {
-		threads_register("ntp sync", &ntpthread, NULL, 0);
+	{
+		struct lua_state_t *state = plua_get_free_state();
+		char *server = NULL;
+		unsigned int nrservers = 0;
+		while(config_setting_get_string(state->L, "ntp-server", nrservers, &server) == 0) {
+			strcpy(ntp_servers.server[nrservers].host, server);
+			ntp_servers.server[nrservers].port = 123;
+			nrservers++;
+		}
+		ntp_servers.nrservers = nrservers;
+		ntp_servers.callback = NULL;
+		if(nrservers > 0) {
+			ntpsync();
+		}
+		assert(plua_check_stack(state->L, 0) == 0);
+		plua_clear_state(state);
 	}
 
-#ifdef _WIN32
-	threads_register("stats", &pilight_stats, NULL, 0);
-#endif
+// #ifdef _WIN32
+	// threads_register("stats", &pilight_stats, NULL, 0);
+// #endif
 
+	timer_stats_req = MALLOC(sizeof(uv_timer_t));
+	if(timer_stats_req == NULL) {
+		OUT_OF_MEMORY /*LCOV_EXCL_LINE*/
+	}
+	uv_timer_init(uv_default_loop(), timer_stats_req);
+	uv_timer_start(timer_stats_req, pilight_stats, 1000, 3000);
 	return EXIT_SUCCESS;
 
 clear:
@@ -2631,6 +3304,7 @@ clear:
 	if(main_loop == 1) {
 		main_gc();
 	}
+	uv_stop(uv_default_loop());
 	return EXIT_FAILURE;
 }
 
@@ -2798,7 +3472,14 @@ int main(int argc, char **argv) {
 
 	int ret = start_pilight(argc, argv);
 	if(ret == EXIT_SUCCESS) {
-		pilight_stats((void *)NULL);
+		uv_run(uv_default_loop(), UV_RUN_DEFAULT);
+		uv_walk(uv_default_loop(), walk_cb, NULL);
+		uv_run(uv_default_loop(), UV_RUN_ONCE);
+
+		while(uv_loop_close(uv_default_loop()) == UV_EBUSY) {
+			uv_run(uv_default_loop(), UV_RUN_ONCE);
+		}
+		// pilight_stats((void *)NULL);
 	}
 	return ret;
 }

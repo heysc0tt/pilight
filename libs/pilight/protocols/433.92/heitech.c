@@ -63,6 +63,11 @@ static void createMessage(int systemcode, int unitcode, int state) {
 static void parseCode(void) {
 	int x = 0, binary[RAW_LENGTH/4];
 
+	if(heitech->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "heitech: parsecode - invalid parameter passed %d", heitech->rawlen);
+		return;
+	}
+
 	for(x=0;x<heitech->rawlen-2;x+=4) {
 		if(heitech->raw[x+3] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
 			binary[x/4]=1;
@@ -205,12 +210,12 @@ void heitechInit(void) {
 	heitech->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	heitech->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&heitech->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&heitech->options, 'u', "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&heitech->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&heitech->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&heitech->options, "s", "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&heitech->options, "u", "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&heitech->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&heitech->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 
-	options_add(&heitech->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&heitech->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	heitech->parseCode=&parseCode;
 	heitech->createCode=&createCode;
@@ -221,7 +226,7 @@ void heitechInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "heitech";
-	module->version = "1.0";
+	module->version = "1.1";
 	module->reqversion = "6.0";
 	module->reqcommit = "187";
 }

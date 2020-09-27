@@ -60,6 +60,11 @@ static void createMessage(int id, int state) {
 static void parseCode(void) {
 	int i = 0, binary[RAW_LENGTH/4];
 
+	if(ehome->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "ehome: parsecode - invalid parameter passed %d", ehome->rawlen);
+		return;
+	}
+
 	for(i=0;i<ehome->rawlen-2;i+=4) {
 		if(ehome->raw[i+3] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
 			binary[i/4]=1;
@@ -188,12 +193,12 @@ void ehomeInit(void) {
 	ehome->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	ehome->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&ehome->options, 'i', "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-4])$");
-	options_add(&ehome->options, 't', "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&ehome->options, 'f', "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&ehome->options, "i", "id", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^([0-4])$");
+	options_add(&ehome->options, "t", "on", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&ehome->options, "f", "off", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 
-	options_add(&ehome->options, 0, "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
-	options_add(&ehome->options, 0, "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&ehome->options, "0", "readonly", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
+	options_add(&ehome->options, "0", "confirm", OPTION_HAS_VALUE, GUI_SETTING, JSON_NUMBER, (void *)0, "^[10]{1}$");
 
 	ehome->parseCode=&parseCode;
 	ehome->createCode=&createCode;
@@ -204,7 +209,7 @@ void ehomeInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "ehome";
-	module->version = "1.0";
+	module->version = "1.1";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }

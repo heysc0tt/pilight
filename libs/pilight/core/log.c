@@ -147,22 +147,53 @@ int log_gc(void) {
 	return 1;
 }
 
-void logprintf(int prio, const char *format_str, ...) {
+/*
+ * A compatible logprint for wiringX
+ */
+void logprintf1(int prio, char *file, int line, const char *format_str, ...) {
+	char *a = MALLOC(128);
+	va_list ap, apcpy;
+	int bytes = 0;
+
+	va_copy(apcpy, ap);
+	va_start(apcpy, format_str);
+#ifdef _WIN32
+	bytes = _vscprintf(format_str, apcpy);
+#else
+	bytes = vsnprintf(NULL, 0, format_str, apcpy);
+#endif
+	if(bytes == -1) {
+		fprintf(stderr, "ERROR: unproperly formatted logprintf message %s\n", format_str);
+	} else {
+		va_end(apcpy);
+		if((a = REALLOC(a, (size_t)bytes+1)) == NULL) {
+			fprintf(stderr, "out of memory\n");
+			exit(EXIT_FAILURE);
+		}
+		va_start(ap, format_str);
+		vsprintf(a, format_str, ap);
+		va_end(ap);
+		logprintf(prio, a);
+	}
+	FREE(a);
+}
+
+void _logprintf(int prio, char *file, int line, const char *str, ...) {
 	struct timeval tv;
 	struct tm tm;
 	va_list ap, apcpy;
-	char fmt[64], buf[64], *line = MALLOC(128);
+	char fmt[64], buf[64], *buffer = MALLOC(128);
 	int save_errno = -1, pos = 0, bytes = 0;
 
 	memset(&tm, '\0', sizeof(struct tm));
 
-	if(line == NULL) {
+	if(buffer == NULL) {
 		fprintf(stderr, "out of memory\n");
 		exit(EXIT_FAILURE);
 	}
 	save_errno = errno;
 
-	memset(line, '\0', 128);
+	memset(buffer, '\0', 128);
 	memset(buf, '\0',  64);
 
 	if(loglevel >= prio) {
@@ -177,59 +208,63 @@ void logprintf(int prio, const char *format_str, ...) {
 			strftime(fmt, sizeof(fmt), "%b %d %H:%M:%S", &tm);
 			snprintf(buf, sizeof(buf), "%s:%03u", fmt, (unsigned int)tv.tv_usec);
 		}
-		pos += sprintf(line, "[%22.22s] %s: ", buf, progname);
+#ifdef DEBUG
+		pos += sprintf(buffer, "(%s #%d) [%s:%03u] ", file, line, fmt, (unsigned int)tv.tv_usec);
+#else
+		pos += sprintf(buffer, "[%s:%03u] ", fmt, (unsigned int)tv.tv_usec);
+#endif
 
 		switch(prio) {
 			case LOG_WARNING:
-				pos += sprintf(&line[pos], "WARNING: ");
+				pos += sprintf(&buffer[pos], "WARNING: ");
 			break;
 			case LOG_ERR:
-				pos += sprintf(&line[pos], "ERROR: ");
+				pos += sprintf(&buffer[pos], "ERROR: ");
 			break;
 			case LOG_INFO:
-				pos += sprintf(&line[pos], "INFO: ");
+				pos += sprintf(&buffer[pos], "INFO: ");
 			break;
 			case LOG_NOTICE:
-				pos += sprintf(&line[pos], "NOTICE: ");
+				pos += sprintf(&buffer[pos], "NOTICE: ");
 			break;
 			case LOG_DEBUG:
-				pos += sprintf(&line[pos], "DEBUG: ");
+				pos += sprintf(&buffer[pos], "DEBUG: ");
 			break;
 			case LOG_STACK:
-				pos += sprintf(&line[pos], "STACK: ");
+				pos += sprintf(&buffer[pos], "STACK: ");
 			break;
 			default:
 			break;
 		}
 
 		va_copy(apcpy, ap);
-		va_start(apcpy, format_str);
+		va_start(apcpy, str);
 #ifdef _WIN32
-		bytes = _vscprintf(format_str, apcpy);
+		bytes = _vscprintf(str, apcpy);
 #else
-		bytes = vsnprintf(NULL, 0, format_str, apcpy);
+		bytes = vsnprintf(NULL, 0, str, apcpy);
 #endif
 		if(bytes == -1) {
-			fprintf(stderr, "ERROR: unproperly formatted logprintf message %s\n", format_str);
+			fprintf(stderr, "ERROR: unproperly formatted logprintf message %s\n", str);
 		} else {
 			va_end(apcpy);
-			if((line = REALLOC(line, (size_t)bytes+(size_t)pos+3)) == NULL) {
+			if((buffer = REALLOC(buffer, (size_t)bytes+(size_t)pos+3)) == NULL) {
 				fprintf(stderr, "out of memory\n");
 				exit(EXIT_FAILURE);
 			}
-			va_start(ap, format_str);
-			pos += vsprintf(&line[pos], format_str, ap);
+			va_start(ap, str);
+			pos += vsprintf(&buffer[pos], str, ap);
 			va_end(ap);
 		}
-		line[pos++]='\n';
-		line[pos++]='\0';
+		buffer[pos++]='\n';
+		buffer[pos++]='\0';
 	}
 	if(shelllog == 1) {
-		fprintf(stderr, "%s", line);
+		fprintf(stderr, "%s", buffer);
 	}
 #ifdef _WIN32
 	if(prio == LOG_ERR && strstr(progname, "daemon") != NULL && pilight.running == 0) {
-		MessageBox(NULL, line, "pilight :: error", MB_OK);
+		MessageBox(NULL, buffer, "pilight :: error", MB_OK);
 	}
 #endif
 	if(stop == 0 && pos > 0) {
@@ -248,7 +283,7 @@ void logprintf(int prio, const char *format_str, ...) {
 					exit(EXIT_FAILURE);
 				}
 				memset(node->line, '\0', (size_t)pos+1);
-				strcpy(node->line, line);
+				strcpy(node->line, buffer);
 				node->next = NULL;
 
 				if(logqueue_number == 0) {
@@ -269,7 +304,7 @@ void logprintf(int prio, const char *format_str, ...) {
 			}
 		}
 	}
-	FREE(line);
+	FREE(buffer);
 	errno = save_errno;
 }
 
@@ -439,9 +474,15 @@ int log_level_get(void) {
 	return loglevel;
 }
 
-void logerror(const char *format_str, ...) {
+/*
+ * We don't want a formatted string here
+ * because that will crash on strings like
+ * DATE_FORMAT(dt, "%H%M%S") due to the
+ * unescaped percentages.
+ */
+void logerror(char *str) {
 	char line[1024];
-	va_list ap;
+	// va_list ap;
 	struct stat sb;
 	FILE *f = NULL;
 	char fmt[64], buf[64];
@@ -454,7 +495,7 @@ void logerror(const char *format_str, ...) {
 	const char *errpath = "/var/log/pilight.err";
 #endif
 	memset(line, '\0', 1024);
-	memset(&ap, '\0', sizeof(va_list));
+	// memset(&ap, '\0', sizeof(va_list));
 	memset(&sb, '\0', sizeof(struct stat));
 	memset(&tv, '\0', sizeof(struct timeval));
 	memset(date, '\0', 128);
@@ -472,8 +513,9 @@ void logerror(const char *format_str, ...) {
 
 	sprintf(date, "[%22.22s] %s: ", buf, progname);
 	strcat(line, date);
-	va_start(ap, format_str);
-	vsprintf(&line[strlen(line)], format_str, ap);
+	// va_start(ap, format_str);
+	// vsprintf(&line[strlen(line)], format_str, ap);
+	memcpy(&line[strlen(line)], str, strlen(str));
 	strcat(line, "\n");
 
 	if((stat(errpath, &sb)) >= 0) {
@@ -505,5 +547,5 @@ void logerror(const char *format_str, ...) {
 		fclose(f);
 		f = NULL;
 	}
-	va_end(ap);
+	// va_end(ap);
 }

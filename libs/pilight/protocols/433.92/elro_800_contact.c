@@ -61,6 +61,11 @@ static void createMessage(int systemcode, int unitcode, int state) {
 static void parseCode(void) {
 	int binary[RAW_LENGTH/4], x = 0, i = 0;
 
+	if(elro_800_contact->rawlen>RAW_LENGTH) {
+		logprintf(LOG_ERR, "elro_800_contact: parsecode - invalid parameter passed %d", elro_800_contact->rawlen);
+		return;
+	}
+
 	for(x=0;x<elro_800_contact->rawlen-2;x+=4) {
 		if(elro_800_contact->raw[x+3] > (int)((double)AVG_PULSE_LENGTH*((double)PULSE_MULTIPLIER/2))) {
 			binary[i++] = 1;
@@ -90,10 +95,10 @@ void elro800ContactInit(void) {
 	elro_800_contact->maxgaplen = MAX_PULSE_LENGTH*PULSE_DIV;
 	elro_800_contact->mingaplen = MIN_PULSE_LENGTH*PULSE_DIV;
 
-	options_add(&elro_800_contact->options, 's', "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&elro_800_contact->options, 'u', "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
-	options_add(&elro_800_contact->options, 't', "opened", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
-	options_add(&elro_800_contact->options, 'f', "closed", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&elro_800_contact->options, "s", "systemcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&elro_800_contact->options, "u", "unitcode", OPTION_HAS_VALUE, DEVICES_ID, JSON_NUMBER, NULL, "^(3[012]?|[012][0-9]|[0-9]{1})$");
+	options_add(&elro_800_contact->options, "t", "opened", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
+	options_add(&elro_800_contact->options, "f", "closed", OPTION_NO_VALUE, DEVICES_STATE, JSON_STRING, NULL, NULL);
 
 	elro_800_contact->parseCode=&parseCode;
 	elro_800_contact->validate=&validate;
@@ -102,7 +107,7 @@ void elro800ContactInit(void) {
 #if defined(MODULE) && !defined(_WIN32)
 void compatibility(struct module_t *module) {
 	module->name = "elro_800_contact";
-	module->version = "2.3";
+	module->version = "2.4";
 	module->reqversion = "6.0";
 	module->reqcommit = "84";
 }
