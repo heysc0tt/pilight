@@ -253,6 +253,11 @@ if(${PROTOCOL_HEITECH} MATCHES "OFF")
 	list(REMOVE_ITEM ${PROJECT_NAME}_headers "${PROJECT_SOURCE_DIR}/heitech.h")
 endif()
 
+if(${PROTOCOL_MAVERICK} MATCHES "OFF")
+    list(REMOVE_ITEM ${PROJECT_NAME}_sources "${PROJECT_SOURCE_DIR}/maverick.c")
+    list(REMOVE_ITEM ${PROJECT_NAME}_headers "${PROJECT_SOURCE_DIR}/maverick.h")
+endif()
+
 if(${PROTOCOL_SECUDO_SMOKE} MATCHES "OFF")
 	list(REMOVE_ITEM ${PROJECT_NAME}_sources "${PROJECT_SOURCE_DIR}/secudo_smoke.c")
 	list(REMOVE_ITEM ${PROJECT_NAME}_headers "${PROJECT_SOURCE_DIR}/secudo_smoke.h")

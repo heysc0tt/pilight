@@ -193,6 +193,58 @@ if(NOT WIN32)
 		endif()
 	endif()
 
+	if(${PROTOCOL_MAVERICK} MATCHES "ON")
+		set(CMAKE_BSON_LIBS_INIT)
+
+		find_library(CMAKE_BSON_LIBS_INIT
+			NAME bson-1.0
+			PATHS
+				${CROSS_COMPILE_LIBS}
+				/usr/lib
+				/usr/lib32
+				/usr/lib64
+				/usr/lib/i386-linux-gnu		
+				/usr/lib/x86_64-linux-gnu
+				/usr/local/lib
+				/usr/local/lib32
+				/usr/local/lib64
+				/usr/lib/arm-linux-gnueabi
+				/usr/lib/arm-linux-gnueabihf
+			NO_DEFAULT_PATH)
+
+		if(${CMAKE_BSON_LIBS_INIT} MATCHES "CMAKE_BSON_LIBS_INIT-NOTFOUND")
+			message(FATAL_ERROR "Looking for libbson - not found")
+		else()
+			message(STATUS "Looking for libbson - found (${CMAKE_BSON_LIBS_INIT})")
+		endif()
+
+		set(CMAKE_MONGOC_LIBS_INIT)
+
+		find_library(CMAKE_MONGOC_LIBS_INIT
+			NAME mongoc
+			PATHS
+				${CROSS_COMPILE_LIBS}
+				/usr/lib
+				/usr/lib32
+				/usr/lib64
+				/usr/lib/i386-linux-gnu		
+				/usr/lib/x86_64-linux-gnu
+				/usr/local/lib
+				/usr/local/lib32
+				/usr/local/lib64
+				/usr/lib/arm-linux-gnueabi
+				/usr/lib/arm-linux-gnueabihf
+			NO_DEFAULT_PATH)
+
+		if(${CMAKE_MONGOC_LIBS_INIT} MATCHES "CMAKE_MONGOC_LIBS_INIT-NOTFOUND")
+			message(FATAL_ERROR "Looking for libmongoc - not found")
+		else()
+			message(STATUS "Looking for libmongoc - found (${CMAKE_MONGOC_LIBS_INIT})")
+		endif()
+
+
+	endif()
+  
 	# set(CMAKE_UNWIND_LIBS_INIT)
 
 	# if(NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "^mips" AND NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "^aarch64")
@@ -364,6 +416,8 @@ endif()
 include_directories(${PROJECT_SOURCE_DIR}/inc)
 include_directories(${PROJECT_SOURCE_DIR}/libs/libuv)
 include_directories(/usr/local/include/)
+include_directories(/usr/local/include/libmongoc-1.0)
+include_directories(/usr/local/include/libbson-1.0)
 
 add_subdirectory(inc)
 add_subdirectory(libs)
@@ -453,6 +507,13 @@ if(${MODULESPACK} MATCHES "OFF" OR WIN32)
 		target_link_libraries(${PROJECT_NAME}_shared ${CMAKE_PCAP_LIBS_INIT})
 		target_link_libraries(${PROJECT_NAME}_static ${CMAKE_PCAP_LIBS_INIT})
 	endif()
+
+	if(${PROTOCOL_MAVERICK} MATCHES "ON")
+		target_link_libraries(${PROJECT_NAME}_shared ${CMAKE_MONGOC_LIBS_INIT})
+		target_link_libraries(${PROJECT_NAME}_shared ${CMAKE_BSON_LIBS_INIT})
+		target_link_libraries(${PROJECT_NAME}_static ${CMAKE_MONGOC_LIBS_INIT})
+		target_link_libraries(${PROJECT_NAME}_static ${CMAKE_BSON_LIBS_INIT})
+	endif()		
 
 	# if(NOT WIN32)
 		# target_link_libraries(${PROJECT_NAME}_shared ${CMAKE_UNWIND_LIBS_INIT})
